@@ -1,0 +1,20 @@
+mod handlers;
+pub mod models;
+pub mod repository;
+mod service;
+mod validation;
+
+use axum::{Router, routing::get};
+
+use crate::app_state::AppState;
+
+pub fn router() -> Router<AppState> {
+    Router::new()
+        .route("/", get(handlers::list).post(handlers::create))
+        .route(
+            "/:id",
+            get(handlers::get)
+                .put(handlers::update)
+                .delete(handlers::delete),
+        )
+}
