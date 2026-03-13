@@ -52,8 +52,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let config = Config::from_env()?;
     let pool = connect_pool(&config.database_url, 5).await?;
-    sqlx::migrate!("../../migrations").run(&pool).await?;
-
     let storage = build_storage_client(&config)?;
     ensure_bucket(&storage, &config.minio_bucket).await;
 

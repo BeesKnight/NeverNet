@@ -680,6 +680,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d7a1e2f27636f116493b8b860f5546edb47c8d8f8ea73e1d2a20be88e28d1fea"
 
 [[package]]
+name = "db-migrator"
+version = "0.1.0"
+dependencies = [
+ "dotenvy",
+ "observability",
+ "persistence",
+ "sqlx",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "demo-seed"
 version = "0.1.0"
 dependencies = [
@@ -1592,6 +1604,20 @@ dependencies = [
  "hashbrown 0.16.1",
  "serde",
  "serde_core",
+]
+
+[[package]]
+name = "infra-bootstrap"
+version = "0.1.0"
+dependencies = [
+ "async-nats",
+ "dotenvy",
+ "messaging",
+ "observability",
+ "rust-s3",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

@@ -23,7 +23,7 @@ ENV APP_NAME=${APP_NAME}
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
+    && apt-get install -y --no-install-recommends ca-certificates curl netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

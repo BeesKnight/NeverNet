@@ -26,6 +26,10 @@ Browser
   -> Frontend (React/Vite)
   -> Edge API / BFF (REST/JSON)
 
+Startup Bootstrap
+  -> db-migrator -> PostgreSQL migrations
+  -> infra-bootstrap -> MinIO bucket + JetStream stream/consumers
+
 Edge API / BFF
   -> Identity Service (gRPC)
   -> Event Command Service (gRPC)
@@ -149,15 +153,32 @@ Query service должен читать projection-таблицы, а не write
 - report-related orchestration;
 - при необходимости summary/report-specific reads, если они не живут в query service.
 
+### db-migrator
+
+Отвечает за:
+
+- единственное применение SQLx migrations при startup compose-стека;
+- гарантированный прогон схемы до старта runtime-сервисов.
+
+### infra-bootstrap
+
+Отвечает за:
+
+- создание или валидацию MinIO bucket;
+- создание или валидацию JetStream stream;
+- создание или валидацию durable consumers для worker-пайплайна;
+- устранение ручной инициализации инфраструктуры при локальном запуске.
+
 ### Worker
 
 Отвечает за:
 
 - outbox relay в JetStream;
-- bootstrap JetStream stream/consumers;
 - обновление projection-моделей;
 - обработку export jobs;
 - идемпотентную обработку сообщений;
+- durable deduplication через `processed_messages` для projector и terminal export handling;
+- защиту export flow от duplicate claim через Redis lock и monotonic DB status transitions;
 - cache invalidation / cache refresh side effects.
 
 ## Write path
@@ -169,7 +190,7 @@ Query service должен читать projection-таблицы, а не write
 3. Edge API вызывает внутренний command service.
 4. Command service пишет authoritative state.
 5. Command service пишет matching outbox row в той же DB-транзакции.
-6. Worker relay публикует unpublished outbox rows в JetStream.
+6. Worker relay публикует unpublished outbox rows в JetStream и по каждой строке явно фиксирует успех или ошибку публикации.
 7. Projector consumers обновляют projection-таблицы.
 8. Query service читает обновлённые projections.
 
@@ -210,11 +231,17 @@ Async backbone нужен, чтобы:
 Это означает:
 
 - у инфраструктурных сервисов есть healthchecks;
-- прикладные сервисы зависят от healthy infra;
-- миграции идут через отдельный one-shot migrator;
+- прикладные сервисы зависят от healthy infra и успешного завершения one-shot bootstrap-сервисов;
+- миграции идут через отдельный one-shot `db-migrator`;
 - сервисы не соревнуются друг с другом за изменение схемы;
-- JetStream bootstrap делается явно;
-- MinIO bucket bootstrap делается явно.
+- `infra-bootstrap` явно создаёт или валидирует JetStream stream/consumers;
+- `infra-bootstrap` явно создаёт или валидирует MinIO bucket;
+- последовательность запуска compose выглядит так:
+  1. `db`, `redis`, `nats`, `minio`
+  2. `db-migrator`, `infra-bootstrap`
+  3. внутренние backend-сервисы и `worker`
+  4. `edge-api`
+  5. `frontend`
 
 ## Модель безопасности
 

@@ -1,10 +1,12 @@
 [workspace]
 members = [
+    "apps/db-migrator",
     "apps/edge-api",
     "apps/identity-svc",
     "apps/demo-seed",
     "apps/event-command-svc",
     "apps/event-query-svc",
+    "apps/infra-bootstrap",
     "apps/report-svc",
     "apps/worker",
     "crates/cache",

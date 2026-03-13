@@ -50,8 +50,6 @@ async fn main() -> Result<(), AppError> {
     let redis = redis::Client::open(config.redis_url.clone())
         .map_err(|error| AppError::Config(format!("Invalid REDIS_URL: {error}")))?;
 
-    sqlx::migrate!("../../migrations").run(&pool).await?;
-
     observability::spawn_metrics_server("edge-api", config.metrics_port);
 
     let state = AppState::new(pool, redis, config.clone());

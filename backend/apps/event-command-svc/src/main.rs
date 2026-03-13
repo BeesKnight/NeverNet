@@ -682,4 +682,65 @@ mod tests {
                 .unwrap();
         assert!(deleted.is_none());
     }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn event_crud_writes_expected_outbox_events(pool: PgPool) {
+        let user_id = insert_user(&pool, "outbox@eventdesign.local").await;
+        let category = create_category(&pool, user_id, "Conference", "#0f766e")
+            .await
+            .expect("category created");
+
+        let event = create_event(
+            &pool,
+            user_id,
+            event_mutation(category.id, "Defense rehearsal", "planned"),
+        )
+        .await
+        .expect("event created");
+        update_event(
+            &pool,
+            user_id,
+            event.id,
+            event_mutation(category.id, "Defense rehearsal", "in_progress"),
+        )
+        .await
+        .expect("event updated");
+        delete_event(&pool, user_id, event.id)
+            .await
+            .expect("event deleted");
+
+        let created_count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM outbox_events WHERE aggregate_id = $1 AND event_type = 'event.created'",
+        )
+        .bind(event.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let updated_count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM outbox_events WHERE aggregate_id = $1 AND event_type = 'event.updated'",
+        )
+        .bind(event.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let status_changed_count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM outbox_events WHERE aggregate_id = $1 AND event_type = 'event.status_changed'",
+        )
+        .bind(event.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let deleted_count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM outbox_events WHERE aggregate_id = $1 AND event_type = 'event.deleted'",
+        )
+        .bind(event.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(created_count, 1);
+        assert_eq!(updated_count, 1);
+        assert_eq!(status_changed_count, 1);
+        assert_eq!(deleted_count, 1);
+    }
 }

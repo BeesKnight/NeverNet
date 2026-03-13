@@ -1,22 +1,23 @@
 # EventDesign
 
-EventDesign is a graduation project for event planning and event operations.
+EventDesign — дипломный full-stack проект для планирования мероприятий, аналитики и асинхронного экспорта отчётов.
 
-The repository is now in the Phase 1 foundation state:
+Текущее состояние репозитория соответствует фазе 1:
 
-- the backend is a Rust workspace
-- `edge-api` is the only published backend entrypoint
-- `identity-svc` handles registration, login, logout, and current-user lookup over gRPC
-- browser auth uses an HttpOnly cookie flow with `credentials: include`
-- current user-facing features still run end to end
-- Docker Compose includes PostgreSQL, Redis, NATS JetStream, and MinIO
+- стек поднимается одной командой `docker compose up --build -d`;
+- миграции применяются отдельным one-shot сервисом `db-migrator`;
+- bootstrap MinIO и NATS JetStream выполняется отдельным one-shot сервисом `infra-bootstrap`;
+- прикладные сервисы стартуют только после healthy infra и успешного завершения bootstrap-этапов;
+- фронтенд работает только через `edge-api`.
 
-## Phase 1 architecture
+## Состав стека
 
 ```text
 frontend/
 backend/
   apps/
+    db-migrator/
+    infra-bootstrap/
     edge-api/
     identity-svc/
     event-command-svc/
@@ -24,118 +25,121 @@ backend/
     report-svc/
     worker/
   crates/
-    contracts/
-    shared-kernel/
-    persistence/
-    messaging/
     cache/
+    contracts/
+    messaging/
     observability/
+    persistence/
+    shared-kernel/
 ```
 
-What is live now:
+Compose-стек включает:
 
-- `edge-api` serves the REST API used by the browser
-- `identity-svc` is the active internal auth service
-- `event-command-svc`, `event-query-svc`, `report-svc`, and `worker` are bootable Phase 1 skeletons with explicit contracts
+- `db` (PostgreSQL);
+- `redis`;
+- `nats` с JetStream;
+- `minio`;
+- `db-migrator`;
+- `infra-bootstrap`;
+- `identity-svc`;
+- `event-command-svc`;
+- `event-query-svc`;
+- `report-svc`;
+- `worker`;
+- `edge-api`;
+- `frontend`;
+- `prometheus`;
+- `grafana`.
 
-Phase 1 compatibility layers:
+## Быстрый старт
 
-- categories, events, calendar, reports, settings, and exports still execute inside `edge-api`
-- export files are still written to the shared local volume at `backend/storage/exports`
-- the cookie session is a signed compatibility token and is not yet backed by durable session storage
-
-## Supported product scope
-
-The following features remain available during the migration:
-
-- registration
-- login and logout
-- categories
-- event CRUD
-- filtering and search
-- reports by period and category
-- PDF and XLSX export jobs
-- UI settings
-- calendar view
-
-## Docker Compose
-
-Start the full stack:
+Основная команда запуска:
 
 ```bash
-docker compose up --build
+docker compose up --build -d
 ```
 
-Published endpoints:
+Ожидаемая последовательность:
 
-- frontend: `http://localhost:3000`
-- edge API: `http://localhost:8080`
-- Redis: `localhost:6379`
-- NATS JetStream client port: `localhost:4222`
-- NATS monitoring: `http://localhost:8222`
+1. Поднимаются `db`, `redis`, `nats`, `minio` и доходят до `healthy`.
+2. `db-migrator` применяет SQLx migrations и завершается с кодом `0`.
+3. `infra-bootstrap` создаёт или валидирует bucket в MinIO, stream в JetStream и durable consumers, затем завершается с кодом `0`.
+4. Стартуют backend-сервисы и `worker`.
+5. После их готовности стартует `edge-api`.
+6. После `edge-api` стартует `frontend`.
+
+Полезные команды проверки:
+
+```bash
+docker compose ps
+docker compose logs --no-color
+docker compose logs --no-color db-migrator infra-bootstrap
+```
+
+## Доступные адреса
+
+- Frontend: `http://localhost:3000`
+- Edge API: `http://localhost:8080`
 - MinIO API: `http://localhost:9000`
-- MinIO console: `http://localhost:9001`
+- MinIO Console: `http://localhost:9001`
+- NATS client port: `localhost:4222`
+- NATS monitor API: `http://localhost:8222`
+- Prometheus: `http://localhost:9090`
+- Grafana: `http://localhost:3001`
 
-Compose services:
+## Что инициализируется автоматически
 
-- `frontend`
-- `edge-api`
-- `identity-svc`
-- `event-command-svc`
-- `event-query-svc`
-- `report-svc`
-- `worker`
-- `db`
-- `redis`
-- `nats`
-- `minio`
+`db-migrator`:
 
-Stop the stack:
+- применяет все файлы из `backend/migrations`;
+- является единственной точкой применения миграций при старте compose-стека.
 
-```bash
-docker compose down
-```
+`infra-bootstrap`:
 
-Remove the persistent volumes as well:
+- создаёт или валидирует bucket `eventdesign-exports` в MinIO;
+- создаёт или валидирует stream `EVENTDESIGN_DOMAIN_EVENTS`;
+- создаёт или валидирует durable consumers `projection-worker` и `export-worker`.
 
-```bash
-docker compose down -v
-```
+## Локальная разработка по частям
 
-## Local development
+Если нужен частичный запуск без полного compose-стека:
 
-1. Start infrastructure:
+1. Поднять инфраструктуру:
 
 ```bash
 docker compose up -d db redis nats minio
 ```
 
-2. Copy environment files:
-
-```bash
-copy backend\.env.example backend\.env
-copy frontend\.env.example frontend\.env
-```
-
-3. Run backend services:
+2. Применить миграции и bootstrap:
 
 ```bash
 cd backend
+cargo run -p db-migrator
+cargo run -p infra-bootstrap
+```
+
+3. Запустить backend-сервисы:
+
+```bash
 cargo run -p identity-svc
+cargo run -p event-command-svc
+cargo run -p event-query-svc
+cargo run -p report-svc
+cargo run -p worker
 cargo run -p edge-api
 ```
 
-4. Run the frontend:
+4. Запустить фронтенд:
 
 ```bash
-cd frontend
+cd ../frontend
 npm install
 npm run dev
 ```
 
-Local frontend development uses a Vite proxy to forward `/api` requests to `http://localhost:8080`.
+Vite dev server проксирует `/api` в `VITE_EDGE_API_ORIGIN`, поэтому браузерный auth flow остаётся cookie-based.
 
-## Quality checks
+## Полезные проверки
 
 Backend:
 
@@ -153,11 +157,18 @@ npm run lint
 npm run build
 ```
 
-## Known limitations
+Инфраструктура:
 
-- the write/query/report services are scaffolded but not authoritative yet
-- the async backbone is configured locally but not fully migrated into the business flow
-- exports still complete through the `edge-api` compatibility path and shared filesystem storage
-- CSRF protection and durable session persistence are still Phase 2 and Phase 3 work
+```bash
+docker compose up --build -d
+docker compose ps
+docker compose logs --no-color
+```
 
-See [docs/architecture.md](/docs/architecture.md) and [docs/delivery-plan.md](/docs/delivery-plan.md) for the migration direction.
+## Текущие ограничения
+
+- observability-стек поднят, но часть scrape/provisioning-настроек ещё требует доводки в следующих фазах;
+- smoke script ещё не добавлен в репозиторий;
+- auth/security-hardening, полный async backbone и финальная полировка export flow остаются задачами следующих фаз.
+
+Подробности по архитектуре и этапам доведения: [docs/architecture.md](/docs/architecture.md), [docs/delivery-plan.md](/docs/delivery-plan.md), [docs/runbook.md](/docs/runbook.md).

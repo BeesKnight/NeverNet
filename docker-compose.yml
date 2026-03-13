@@ -21,6 +21,12 @@ services:
     image: redis:7-alpine
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
     restart: unless-stopped
 
   nats:
@@ -29,6 +35,16 @@ services:
     ports:
       - "4222:4222"
       - "8222:8222"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q -O - http://127.0.0.1:8222/healthz > /dev/null || wget -q -O - http://127.0.0.1:8222/varz > /dev/null",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
     restart: unless-stopped
 
   minio:
@@ -42,7 +58,54 @@ services:
     ports:
       - "9000:9000"
       - "9001:9001"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q -O - http://127.0.0.1:9000/minio/health/live > /dev/null || curl -fsS http://127.0.0.1:9000/minio/health/live > /dev/null",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
     restart: unless-stopped
+
+  db-migrator:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        APP_NAME: db-migrator
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://eventdesign:eventdesign@db:5432/eventdesign
+      LOG_FORMAT: json
+      RUST_LOG: db_migrator=info
+    restart: "no"
+
+  infra-bootstrap:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        APP_NAME: infra-bootstrap
+    depends_on:
+      nats:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      NATS_URL: nats://nats:4222
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_BUCKET: eventdesign-exports
+      MINIO_ACCESS_KEY: eventdesign
+      MINIO_SECRET_KEY: eventdesign123
+      MINIO_REGION: us-east-1
+      LOG_FORMAT: json
+      RUST_LOG: infra_bootstrap=info
+    restart: "no"
 
   identity-svc:
     build:
@@ -53,6 +116,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      db-migrator:
+        condition: service_completed_successfully
     environment:
       DATABASE_URL: postgres://eventdesign:eventdesign@db:5432/eventdesign
       JWT_SECRET: ${JWT_SECRET:-replace-with-a-long-secret}
@@ -60,6 +125,16 @@ services:
       METRICS_PORT: 9101
       LOG_FORMAT: json
       RUST_LOG: identity_svc=info
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "nc -z 127.0.0.1 50051 && curl -fsS http://127.0.0.1:9101/healthz > /dev/null",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
     restart: unless-stopped
 
   event-command-svc:
@@ -71,12 +146,24 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      db-migrator:
+        condition: service_completed_successfully
     environment:
       DATABASE_URL: postgres://eventdesign:eventdesign@db:5432/eventdesign
       GRPC_PORT: 50052
       METRICS_PORT: 9102
       LOG_FORMAT: json
       RUST_LOG: event_command_svc=info
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "nc -z 127.0.0.1 50052 && curl -fsS http://127.0.0.1:9102/healthz > /dev/null",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
     restart: unless-stopped
 
   event-query-svc:
@@ -88,8 +175,10 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      db-migrator:
+        condition: service_completed_successfully
       redis:
-        condition: service_started
+        condition: service_healthy
     environment:
       DATABASE_URL: postgres://eventdesign:eventdesign@db:5432/eventdesign
       REDIS_URL: redis://redis:6379
@@ -97,6 +186,16 @@ services:
       METRICS_PORT: 9103
       LOG_FORMAT: json
       RUST_LOG: event_query_svc=info
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "nc -z 127.0.0.1 50053 && curl -fsS http://127.0.0.1:9103/healthz > /dev/null",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
     restart: unless-stopped
 
   report-svc:
@@ -108,8 +207,12 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      db-migrator:
+        condition: service_completed_successfully
+      infra-bootstrap:
+        condition: service_completed_successfully
       minio:
-        condition: service_started
+        condition: service_healthy
     environment:
       DATABASE_URL: postgres://eventdesign:eventdesign@db:5432/eventdesign
       GRPC_PORT: 50054
@@ -121,6 +224,16 @@ services:
       MINIO_REGION: us-east-1
       LOG_FORMAT: json
       RUST_LOG: report_svc=info
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "nc -z 127.0.0.1 50054 && curl -fsS http://127.0.0.1:9104/healthz > /dev/null",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
     restart: unless-stopped
 
   worker:
@@ -132,12 +245,16 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      db-migrator:
+        condition: service_completed_successfully
+      infra-bootstrap:
+        condition: service_completed_successfully
       redis:
-        condition: service_started
+        condition: service_healthy
       nats:
-        condition: service_started
+        condition: service_healthy
       minio:
-        condition: service_started
+        condition: service_healthy
     environment:
       DATABASE_URL: postgres://eventdesign:eventdesign@db:5432/eventdesign
       REDIS_URL: redis://redis:6379
@@ -150,6 +267,16 @@ services:
       MINIO_REGION: us-east-1
       LOG_FORMAT: json
       RUST_LOG: worker=info
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS http://127.0.0.1:9105/healthz > /dev/null",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
     restart: unless-stopped
 
   demo-seed:
@@ -162,8 +289,12 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      db-migrator:
+        condition: service_completed_successfully
+      infra-bootstrap:
+        condition: service_completed_successfully
       minio:
-        condition: service_started
+        condition: service_healthy
     environment:
       DATABASE_URL: postgres://eventdesign:eventdesign@db:5432/eventdesign
       MINIO_ENDPOINT: http://minio:9000
@@ -182,14 +313,18 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      db-migrator:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
       identity-svc:
-        condition: service_started
+        condition: service_healthy
       event-command-svc:
-        condition: service_started
+        condition: service_healthy
       event-query-svc:
-        condition: service_started
+        condition: service_healthy
       report-svc:
-        condition: service_started
+        condition: service_healthy
     environment:
       DATABASE_URL: postgres://eventdesign:eventdesign@db:5432/eventdesign
       REDIS_URL: redis://redis:6379
@@ -209,6 +344,16 @@ services:
       RUST_LOG: edge_api=info,tower_http=info
     ports:
       - "8080:8080"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS http://127.0.0.1:8080/health > /dev/null && curl -fsS http://127.0.0.1:9100/healthz > /dev/null",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
     restart: unless-stopped
 
   frontend:
@@ -218,9 +363,16 @@ services:
       args:
         VITE_API_BASE_URL: /api
     depends_on:
-      - edge-api
+      edge-api:
+        condition: service_healthy
     ports:
       - "3000:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1/ > /dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
     restart: unless-stopped
 
   prometheus:
@@ -237,7 +389,8 @@ services:
   grafana:
     image: grafana/grafana:12.2.0
     depends_on:
-      - prometheus
+      prometheus:
+        condition: service_started
     environment:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: admin

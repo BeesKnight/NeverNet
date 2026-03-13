@@ -121,6 +121,7 @@
 Назначение:
 
 - durable deduplication для idempotent consumers.
+- используется и projector consumer, и export consumer.
 
 ## Read-side projection tables
 
@@ -266,8 +267,10 @@
 
 1. `export_jobs` получает `queued`;
 2. outbox фиксирует `export.requested`;
-3. worker берёт задачу, генерирует файл, пишет объект в MinIO;
-4. `export_jobs` получает `completed` или `failed`.
+3. worker claim'ит job, переводит её в `processing` и не допускает второй активный claim для того же export;
+4. worker генерирует файл, пишет объект в MinIO;
+5. `export_jobs` получает `completed` или `failed`;
+6. terminal transition одновременно пишет marker в `processed_messages`.
 
 ## Критические инварианты
 
@@ -277,6 +280,7 @@
 - отсутствие foreign key drift;
 - соответствие `export_jobs.status` реальному состоянию storage;
 - отсутствие duplicate processing одного и того же message_id для одного consumer;
+- отсутствие повторного terminal update для уже завершённого export job;
 - eventual consistency между write-side state и projection-таблицами.
 
 ## Практическая заметка

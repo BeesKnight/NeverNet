@@ -238,6 +238,16 @@ enum MessageDisposition {
     SkipAck,
 }
 
+enum ExportClaim {
+    Missing,
+    AlreadyProcessed,
+    InProgress,
+    Claimed(ExportJobRow),
+}
+
+const RELAY_BATCH_SIZE: usize = 50;
+const EXPORT_PROCESSING_TIMEOUT_MINUTES: i64 = 15;
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     observability::init_tracing("worker", "worker=info");
@@ -375,72 +385,118 @@ async fn run_export_consumer(state: AppState) -> Result<(), WorkerError> {
 }
 
 async fn relay_outbox_batch(state: &AppState) -> Result<(), WorkerError> {
+    for _ in 0..RELAY_BATCH_SIZE {
+        if !relay_next_outbox_row(state).await? {
+            break;
+        }
+    }
+
+    Ok(())
+}
+
+async fn relay_next_outbox_row(state: &AppState) -> Result<bool, WorkerError> {
     let mut tx = state.pool.begin().await?;
-    let rows = sqlx::query_as::<_, OutboxEventRow>(
+    let row = sqlx::query_as::<_, OutboxEventRow>(
         r#"
         SELECT id, aggregate_type, aggregate_id, event_type, event_version, payload_json, occurred_at
         FROM outbox_events
         WHERE published_at IS NULL
         ORDER BY occurred_at ASC
-        LIMIT 50
+        LIMIT 1
         FOR UPDATE SKIP LOCKED
         "#,
     )
-    .fetch_all(&mut *tx)
+    .fetch_optional(&mut *tx)
     .await?;
 
-    for row in rows {
-        let envelope = DomainEventEnvelope {
-            id: row.id.to_string(),
-            aggregate_type: row.aggregate_type.clone(),
-            aggregate_id: row.aggregate_id.to_string(),
-            event_type: row.event_type.clone(),
-            event_version: row.event_version,
-            occurred_at: row.occurred_at,
-            payload: row.payload_json.clone(),
-        };
-        let payload = serde_json::to_vec(&envelope)?;
-        let publish = Publish::build()
-            .payload(payload.into())
-            .message_id(row.id.to_string());
-        let publish_result = state
-            .jetstream
-            .send_publish(subject_for_event_type(&row.event_type), publish)
-            .await;
+    let Some(row) = row else {
+        tx.commit().await?;
+        return Ok(false);
+    };
 
-        match publish_result {
-            Ok(ack) => {
-                ack.await.map_err(|error| {
-                    WorkerError::Internal(format!("JetStream ack failed: {error}"))
-                })?;
-                sqlx::query(
-                    r#"
-                    UPDATE outbox_events
-                    SET published_at = NOW(), publish_attempts = publish_attempts + 1, last_error = NULL
-                    WHERE id = $1
-                    "#,
-                )
-                .bind(row.id)
-                .execute(&mut *tx)
-                .await?;
-            }
-            Err(error) => {
-                sqlx::query(
-                    r#"
-                    UPDATE outbox_events
-                    SET publish_attempts = publish_attempts + 1, last_error = $2
-                    WHERE id = $1
-                    "#,
-                )
-                .bind(row.id)
-                .bind(error.to_string())
-                .execute(&mut *tx)
-                .await?;
-            }
+    let publish_result = publish_outbox_event(state, &row).await;
+
+    match publish_result {
+        Ok(()) => mark_outbox_published(&mut tx, row.id).await?,
+        Err(error) => {
+            tracing::warn!(
+                outbox_event_id = %row.id,
+                event_type = %row.event_type,
+                "could not publish outbox event: {}",
+                error
+            );
+            record_outbox_publish_failure(&mut tx, row.id, &error.to_string()).await?;
         }
     }
 
     tx.commit().await?;
+    Ok(true)
+}
+
+async fn publish_outbox_event(state: &AppState, row: &OutboxEventRow) -> Result<(), WorkerError> {
+    let envelope = DomainEventEnvelope {
+        id: row.id.to_string(),
+        aggregate_type: row.aggregate_type.clone(),
+        aggregate_id: row.aggregate_id.to_string(),
+        event_type: row.event_type.clone(),
+        event_version: row.event_version,
+        occurred_at: row.occurred_at,
+        payload: row.payload_json.clone(),
+    };
+    let payload = serde_json::to_vec(&envelope)?;
+    let publish = Publish::build()
+        .payload(payload.into())
+        .message_id(row.id.to_string());
+    let ack = state
+        .jetstream
+        .send_publish(subject_for_event_type(&row.event_type), publish)
+        .await
+        .map_err(|error| WorkerError::Internal(format!("JetStream publish failed: {error}")))?;
+
+    ack.await
+        .map_err(|error| WorkerError::Internal(format!("JetStream ack failed: {error}")))?;
+
+    Ok(())
+}
+
+async fn mark_outbox_published(
+    tx: &mut Transaction<'_, Postgres>,
+    outbox_event_id: Uuid,
+) -> Result<(), WorkerError> {
+    sqlx::query(
+        r#"
+        UPDATE outbox_events
+        SET
+            published_at = COALESCE(published_at, NOW()),
+            publish_attempts = publish_attempts + 1,
+            last_error = NULL
+        WHERE id = $1
+        "#,
+    )
+    .bind(outbox_event_id)
+    .execute(&mut **tx)
+    .await?;
+
+    Ok(())
+}
+
+async fn record_outbox_publish_failure(
+    tx: &mut Transaction<'_, Postgres>,
+    outbox_event_id: Uuid,
+    error_message: &str,
+) -> Result<(), WorkerError> {
+    sqlx::query(
+        r#"
+        UPDATE outbox_events
+        SET publish_attempts = publish_attempts + 1, last_error = $2
+        WHERE id = $1
+        "#,
+    )
+    .bind(outbox_event_id)
+    .bind(error_message)
+    .execute(&mut **tx)
+    .await?;
+
     Ok(())
 }
 
@@ -615,6 +671,13 @@ async fn process_export_message(
             return Ok(MessageDisposition::Ack);
         }
     };
+    let message_id = match Uuid::parse_str(&envelope.id) {
+        Ok(id) => id,
+        Err(error) => {
+            tracing::error!("invalid export envelope id {}: {}", envelope.id, error);
+            return Ok(MessageDisposition::Ack);
+        }
+    };
     let payload: ExportPayload = match serde_json::from_value(envelope.payload) {
         Ok(payload) => payload,
         Err(error) => {
@@ -635,26 +698,25 @@ async fn process_export_message(
     let started_at = Instant::now();
 
     let result: Result<MessageDisposition, WorkerError> = async {
-        let job = load_export_job(&state.pool, payload.export_id)
-            .await?
-            .ok_or_else(|| WorkerError::Internal("Export job not found".to_string()))?;
-
-        if matches!(job.status.as_str(), "completed" | "failed") {
+        if processed_message_exists(&state.pool, EXPORT_CONSUMER, message_id).await? {
             return Ok(MessageDisposition::Ack);
         }
 
-        if job.status == "queued" {
-            mark_export_processing(&state.pool, payload.export_id).await?;
-        }
+        let job = match claim_export_job(&state.pool, payload.export_id, message_id).await? {
+            ExportClaim::Missing | ExportClaim::AlreadyProcessed => {
+                return Ok(MessageDisposition::Ack);
+            }
+            ExportClaim::InProgress => {
+                return Ok(MessageDisposition::SkipAck);
+            }
+            ExportClaim::Claimed(job) => job,
+        };
 
-        let job = load_export_job(&state.pool, payload.export_id)
-            .await?
-            .ok_or_else(|| WorkerError::Internal("Export job not found".to_string()))?;
         let filters: ExportFilters = serde_json::from_value(job.filters.clone())?;
         let summary = generate_report_summary(&state.pool, job.user_id, &filters).await?;
         let artifact = build_export_artifact(&job, &summary)?;
         upload_export_artifact(&state.bucket, &artifact).await?;
-        mark_export_completed(&state.pool, &job, &artifact).await?;
+        mark_export_completed(&state.pool, &job, &artifact, message_id).await?;
 
         Ok(MessageDisposition::Ack)
     }
@@ -674,8 +736,13 @@ async fn process_export_message(
         Err(error) => {
             tracing::error!("export {} failed: {}", payload.export_id, error);
             observability::observe_export_duration(&payload.format, "failed", started_at.elapsed());
-            if let Err(mark_error) =
-                mark_export_failed(&state.pool, payload.export_id, &error.to_string()).await
+            if let Err(mark_error) = mark_export_failed(
+                &state.pool,
+                payload.export_id,
+                &error.to_string(),
+                message_id,
+            )
+            .await
             {
                 tracing::error!(
                     "could not persist export failure for {}: {}",
@@ -760,6 +827,36 @@ async fn claim_processed_message(
     consumer_name: &str,
     message_id: Uuid,
 ) -> Result<bool, WorkerError> {
+    Ok(insert_processed_message(tx, consumer_name, message_id).await? == 1)
+}
+
+async fn processed_message_exists(
+    pool: &PgPool,
+    consumer_name: &str,
+    message_id: Uuid,
+) -> Result<bool, WorkerError> {
+    let exists = sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+            SELECT 1
+            FROM processed_messages
+            WHERE consumer_name = $1 AND message_id = $2
+        )
+        "#,
+    )
+    .bind(consumer_name)
+    .bind(message_id)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(exists)
+}
+
+async fn insert_processed_message(
+    tx: &mut Transaction<'_, Postgres>,
+    consumer_name: &str,
+    message_id: Uuid,
+) -> Result<u64, WorkerError> {
     let result = sqlx::query(
         r#"
         INSERT INTO processed_messages (consumer_name, message_id)
@@ -772,7 +869,7 @@ async fn claim_processed_message(
     .execute(&mut **tx)
     .await?;
 
-    Ok(result.rows_affected() == 1)
+    Ok(result.rows_affected())
 }
 
 async fn fetch_projection_source(
@@ -1213,13 +1310,64 @@ async fn load_export_job(
     Ok(job)
 }
 
-async fn mark_export_processing(pool: &PgPool, export_id: Uuid) -> Result<(), WorkerError> {
+async fn claim_export_job(
+    pool: &PgPool,
+    export_id: Uuid,
+    message_id: Uuid,
+) -> Result<ExportClaim, WorkerError> {
     let mut tx = pool.begin().await?;
     let job = sqlx::query_as::<_, ExportJobRow>(
         r#"
+        SELECT
+            id,
+            user_id,
+            report_type,
+            format,
+            status,
+            filters,
+            object_key,
+            content_type,
+            error_message,
+            created_at,
+            started_at,
+            updated_at,
+            finished_at
+        FROM export_jobs
+        WHERE id = $1
+        FOR UPDATE
+        "#,
+    )
+    .bind(export_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let Some(job) = job else {
+        let _ = insert_processed_message(&mut tx, EXPORT_CONSUMER, message_id).await?;
+        tx.commit().await?;
+        return Ok(ExportClaim::Missing);
+    };
+
+    if matches!(job.status.as_str(), "completed" | "failed") {
+        let _ = insert_processed_message(&mut tx, EXPORT_CONSUMER, message_id).await?;
+        tx.commit().await?;
+        return Ok(ExportClaim::AlreadyProcessed);
+    }
+
+    if job.status == "processing" && !is_stale_export_job(&job) {
+        tx.commit().await?;
+        return Ok(ExportClaim::InProgress);
+    }
+
+    let started_event_type = if job.status == "queued" {
+        Some("export.started")
+    } else {
+        None
+    };
+    let updated_job = sqlx::query_as::<_, ExportJobRow>(
+        r#"
         UPDATE export_jobs
         SET status = 'processing', started_at = NOW(), updated_at = NOW(), error_message = NULL
-        WHERE id = $1 AND status = 'queued'
+        WHERE id = $1
         RETURNING
             id,
             user_id,
@@ -1237,21 +1385,22 @@ async fn mark_export_processing(pool: &PgPool, export_id: Uuid) -> Result<(), Wo
         "#,
     )
     .bind(export_id)
-    .fetch_optional(&mut *tx)
+    .fetch_one(&mut *tx)
     .await?;
 
-    if let Some(job) = job {
-        insert_export_outbox(&mut tx, job.id, "export.started", &job).await?;
+    if let Some(event_type) = started_event_type {
+        insert_export_outbox(&mut tx, updated_job.id, event_type, &updated_job).await?;
     }
 
     tx.commit().await?;
-    Ok(())
+    Ok(ExportClaim::Claimed(updated_job))
 }
 
 async fn mark_export_completed(
     pool: &PgPool,
     job: &ExportJobRow,
     artifact: &ExportArtifact,
+    message_id: Uuid,
 ) -> Result<(), WorkerError> {
     let mut tx = pool.begin().await?;
     let updated = sqlx::query_as::<_, ExportJobRow>(
@@ -1264,7 +1413,7 @@ async fn mark_export_completed(
             error_message = NULL,
             updated_at = NOW(),
             finished_at = NOW()
-        WHERE id = $1
+        WHERE id = $1 AND status = 'processing'
         RETURNING
             id,
             user_id,
@@ -1284,9 +1433,27 @@ async fn mark_export_completed(
     .bind(job.id)
     .bind(&artifact.object_key)
     .bind(artifact.content_type)
-    .fetch_one(&mut *tx)
+    .fetch_optional(&mut *tx)
     .await?;
+
+    let Some(updated) = updated else {
+        let existing = load_export_job_in_tx(&mut tx, job.id).await?;
+        if matches!(
+            existing.as_ref().map(|row| row.status.as_str()),
+            Some("completed" | "failed")
+        ) {
+            let _ = insert_processed_message(&mut tx, EXPORT_CONSUMER, message_id).await?;
+            tx.commit().await?;
+            return Ok(());
+        }
+
+        return Err(WorkerError::Internal(
+            "Export job could not be marked as completed".to_string(),
+        ));
+    };
+
     insert_export_outbox(&mut tx, updated.id, "export.completed", &updated).await?;
+    let _ = insert_processed_message(&mut tx, EXPORT_CONSUMER, message_id).await?;
     tx.commit().await?;
 
     Ok(())
@@ -1296,6 +1463,7 @@ async fn mark_export_failed(
     pool: &PgPool,
     export_id: Uuid,
     error_message: &str,
+    message_id: Uuid,
 ) -> Result<(), WorkerError> {
     let mut tx = pool.begin().await?;
     let updated = sqlx::query_as::<_, ExportJobRow>(
@@ -1306,7 +1474,7 @@ async fn mark_export_failed(
             error_message = $2,
             updated_at = NOW(),
             finished_at = NOW()
-        WHERE id = $1
+        WHERE id = $1 AND status IN ('queued', 'processing')
         RETURNING
             id,
             user_id,
@@ -1325,12 +1493,66 @@ async fn mark_export_failed(
     )
     .bind(export_id)
     .bind(error_message)
-    .fetch_one(&mut *tx)
+    .fetch_optional(&mut *tx)
     .await?;
-    insert_export_outbox(&mut tx, updated.id, "export.failed", &updated).await?;
+
+    if let Some(updated) = updated {
+        insert_export_outbox(&mut tx, updated.id, "export.failed", &updated).await?;
+    } else {
+        let existing = load_export_job_in_tx(&mut tx, export_id).await?;
+        if !matches!(
+            existing.as_ref().map(|row| row.status.as_str()),
+            Some("completed" | "failed")
+        ) {
+            return Err(WorkerError::Internal(
+                "Export job could not be marked as failed".to_string(),
+            ));
+        }
+    }
+
+    let _ = insert_processed_message(&mut tx, EXPORT_CONSUMER, message_id).await?;
     tx.commit().await?;
 
     Ok(())
+}
+
+async fn load_export_job_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    export_id: Uuid,
+) -> Result<Option<ExportJobRow>, WorkerError> {
+    let job = sqlx::query_as::<_, ExportJobRow>(
+        r#"
+        SELECT
+            id,
+            user_id,
+            report_type,
+            format,
+            status,
+            filters,
+            object_key,
+            content_type,
+            error_message,
+            created_at,
+            started_at,
+            updated_at,
+            finished_at
+        FROM export_jobs
+        WHERE id = $1
+        "#,
+    )
+    .bind(export_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+
+    Ok(job)
+}
+
+fn is_stale_export_job(job: &ExportJobRow) -> bool {
+    let Some(started_at) = job.started_at else {
+        return true;
+    };
+
+    started_at <= Utc::now() - chrono::Duration::minutes(EXPORT_PROCESSING_TIMEOUT_MINUTES)
 }
 
 async fn insert_export_outbox(
@@ -1745,6 +1967,7 @@ mod tests {
     async fn export_job_lifecycle_updates_status(pool: PgPool) {
         let user_id = insert_user(&pool).await;
         let export_id = Uuid::new_v4();
+        let message_id = Uuid::new_v4();
 
         sqlx::query(
             r#"
@@ -1758,10 +1981,13 @@ mod tests {
         .await
         .unwrap();
 
-        mark_export_processing(&pool, export_id)
+        let processing_job = match claim_export_job(&pool, export_id, message_id)
             .await
-            .expect("queued job becomes processing");
-        let processing_job = load_export_job(&pool, export_id).await.unwrap().unwrap();
+            .expect("claim succeeds")
+        {
+            ExportClaim::Claimed(job) => job,
+            _ => panic!("export job should have been claimed"),
+        };
         assert_eq!(processing_job.status, "processing");
 
         let artifact = ExportArtifact {
@@ -1769,15 +1995,102 @@ mod tests {
             content_type: "application/pdf",
             bytes: vec![1, 2, 3],
         };
-        mark_export_completed(&pool, &processing_job, &artifact)
+        mark_export_completed(&pool, &processing_job, &artifact, message_id)
             .await
             .expect("processing job becomes completed");
         let completed_job = load_export_job(&pool, export_id).await.unwrap().unwrap();
+        let processed = processed_message_exists(&pool, EXPORT_CONSUMER, message_id)
+            .await
+            .unwrap();
+        let lifecycle_events = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM outbox_events WHERE aggregate_id = $1 AND aggregate_type = 'export'",
+        )
+        .bind(export_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
 
         assert_eq!(completed_job.status, "completed");
         assert_eq!(
             completed_job.object_key.as_deref(),
             Some("/exports/demo/report.pdf")
         );
+        assert!(processed);
+        assert_eq!(lifecycle_events, 2);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn export_claim_skips_active_processing_and_retries_stale_jobs(pool: PgPool) {
+        let user_id = insert_user(&pool).await;
+        let export_id = Uuid::new_v4();
+
+        sqlx::query(
+            r#"
+            INSERT INTO export_jobs (
+                id,
+                user_id,
+                report_type,
+                format,
+                status,
+                filters,
+                started_at,
+                updated_at
+            )
+            VALUES (
+                $1,
+                $2,
+                'summary',
+                'pdf',
+                'processing',
+                '{}'::jsonb,
+                NOW(),
+                NOW()
+            )
+            "#,
+        )
+        .bind(export_id)
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let active_claim = claim_export_job(&pool, export_id, Uuid::new_v4())
+            .await
+            .expect("active claim check succeeds");
+        assert!(matches!(active_claim, ExportClaim::InProgress));
+
+        sqlx::query(
+            r#"
+            UPDATE export_jobs
+            SET started_at = NOW() - INTERVAL '20 minutes', updated_at = NOW() - INTERVAL '20 minutes'
+            WHERE id = $1
+            "#,
+        )
+        .bind(export_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let stale_claim = claim_export_job(&pool, export_id, Uuid::new_v4())
+            .await
+            .expect("stale claim check succeeds");
+        assert!(matches!(stale_claim, ExportClaim::Claimed(_)));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn processed_message_claim_is_idempotent(pool: PgPool) {
+        let message_id = Uuid::new_v4();
+        let mut tx = pool.begin().await.unwrap();
+
+        let first = claim_processed_message(&mut tx, PROJECTION_CONSUMER, message_id)
+            .await
+            .unwrap();
+        let second = claim_processed_message(&mut tx, PROJECTION_CONSUMER, message_id)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        assert!(first);
+        assert!(!second);
     }
 }

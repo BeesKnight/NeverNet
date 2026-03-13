@@ -64,6 +64,7 @@ Async backbone нужен, чтобы:
 - `published_at` выставляется только после успешной публикации;
 - каждая неудача публикации увеличивает `publish_attempts`;
 - `last_error` должен сохраняться;
+- relay должен фиксировать результат публикации по каждой строке отдельно, чтобы ошибка одной записи не откатывала весь батч;
 - relay не имеет права “просто молча” терять плохие строки.
 
 ## Требования к bootstrap JetStream
@@ -106,6 +107,7 @@ Outbox relay отвечает за:
 - публикацию в JetStream;
 - пометку успешной публикации;
 - сохранение ошибок без потери данных;
+- обработку rows поштучно с `FOR UPDATE SKIP LOCKED`, чтобы retry оставался безопасным;
 - bounded retry behavior;
 - достаточные logging/metrics для диагностики lag и failures.
 
@@ -151,6 +153,9 @@ Outbox relay отвечает за:
 
 - duplicate work должен быть предотвращён или безопасно переживаться;
 - статусные переходы job должны быть явными и монотонными;
+- активный `processing` job не должен повторно выполняться вторым worker, пока не истёк stale timeout;
+- stale `processing` job должен быть пригоден для controlled retry без ручной правки БД;
+- terminal transition (`completed` или `failed`) должна записывать dedupe marker для `export.requested`;
 - `completed` job обязан соответствовать реальному объекту в storage.
 
 ## processed_messages и дедупликация
@@ -168,6 +173,11 @@ Outbox relay отвечает за:
 - один consumer не должен дважды применять одно и то же сообщение;
 - duplicate delivery должна превращаться в no-op после durable deduplication check;
 - deduplication по возможности должна жить в той же транзакции, что и mutation projection state.
+
+В EventDesign это означает:
+
+- projection consumer пишет marker в той же транзакции, что и projection update;
+- export consumer пишет marker в той же транзакции, что и terminal update export job.
 
 ## Семантика ack
 
@@ -194,7 +204,7 @@ Outbox relay отвечает за:
 7. worker claim’ит job и переводит её в `processing`;
 8. worker строит файл на основе projection-backed read model;
 9. worker загружает объект в MinIO;
-10. worker обновляет метаданные job и переводит её в `completed` или `failed`;
+10. worker обновляет метаданные job и переводит её в `completed` или `failed`, одновременно фиксируя dedupe marker;
 11. report service выдаёт secure download access или presigned URL.
 
 ## Использование Redis в async flow
@@ -228,6 +238,7 @@ Redis не должен подменять собой durable source-of-truth st
 - consumer не создан на старте;
 - projector делает ack до DB commit;
 - после redelivery в projections появляются дубли;
+- export redelivery повторно выполняет уже активный `processing` job;
 - export job помечается completed без реальной загрузки объекта;
 - dashboard stale из-за отсутствия cache invalidation;
 - outbox rows никогда не публикуются, потому что relay падает молча.

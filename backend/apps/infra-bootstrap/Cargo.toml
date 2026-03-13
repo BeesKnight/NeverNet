@@ -1,0 +1,15 @@
+[package]
+name = "infra-bootstrap"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+async-nats.workspace = true
+dotenvy.workspace = true
+messaging = { path = "../../crates/messaging" }
+observability = { path = "../../crates/observability" }
+s3.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true

@@ -1,9 +1,3 @@
-use argon2::{
-    Argon2,
-    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
-};
-use rand_core::OsRng;
-use shared_kernel::auth::{create_token, decode_token};
 use crate::{
     app_state::AppState,
     auth::{
@@ -13,6 +7,12 @@ use crate::{
     error::AppError,
     users::{models::UserProfile, repository as users_repository},
 };
+use argon2::{
+    Argon2,
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+};
+use rand_core::OsRng;
+use shared_kernel::auth::{create_token, decode_token};
 
 pub async fn register(
     state: &AppState,
