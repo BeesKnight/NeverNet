@@ -746,4 +746,48 @@ mod tests {
         assert_eq!(status_changed_count, 1);
         assert_eq!(deleted_count, 1);
     }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn event_created_outbox_payload_matches_projection_contract(pool: PgPool) {
+        let user_id = insert_user(&pool, "projector@eventdesign.local").await;
+        let category = create_category(&pool, user_id, "Conference", "#0f766e")
+            .await
+            .expect("category created");
+
+        let event = create_event(
+            &pool,
+            user_id,
+            event_mutation(category.id, "Projection payload", "planned"),
+        )
+        .await
+        .expect("event created");
+
+        let payload = sqlx::query_scalar::<_, serde_json::Value>(
+            r#"
+            SELECT payload_json
+            FROM outbox_events
+            WHERE aggregate_id = $1 AND event_type = 'event.created'
+            ORDER BY occurred_at DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(event.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        let user_id_text = user_id.to_string();
+        let event_id_text = event.id.to_string();
+        let category_id_text = category.id.to_string();
+
+        assert_eq!(payload["user_id"].as_str(), Some(user_id_text.as_str()));
+        assert_eq!(payload["event_id"].as_str(), Some(event_id_text.as_str()));
+        assert_eq!(
+            payload["category_id"].as_str(),
+            Some(category_id_text.as_str())
+        );
+        assert_eq!(payload["title"].as_str(), Some("Projection payload"));
+        assert_eq!(payload["status"].as_str(), Some("planned"));
+        assert!(payload["updated_at"].as_str().is_some());
+    }
 }

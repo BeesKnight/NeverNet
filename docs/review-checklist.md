@@ -14,6 +14,7 @@
 Проверить:
 
 - [ ] `docker compose up --build -d` стартует стек без ручных костылей
+- [ ] `demo-seed` завершается успешно и не блокирует старт `edge-api`
 - [ ] `postgres`, `redis`, `nats`, `minio` имеют healthchecks
 - [ ] прикладные сервисы зависят от healthy infra, а не просто от запуска контейнера
 - [ ] миграции применяются через отдельный migrator
@@ -104,6 +105,7 @@
 - [ ] `README.md` на русском языке
 - [ ] `frontend/README.md` на русском языке
 - [ ] `docs/*` на русском языке
+- [ ] в README описаны запуск, smoke, demo-flow и reset demo dataset
 - [ ] `architecture.md` соответствует реальности
 - [ ] `runbook.md` соответствует реальному запуску
 - [ ] `demo-script.md` соответствует текущему UI и флоу
@@ -115,6 +117,7 @@
 
 - [ ] есть `scripts/smoke.sh`
 - [ ] smoke script проходит
+- [ ] `docker compose run --rm demo-seed` воспроизводимо восстанавливает demo dataset
 - [ ] backend integration tests проходят
 - [ ] frontend smoke/integration tests проходят
 - [ ] `cargo fmt --check` проходит
@@ -130,6 +133,7 @@
 Если сейчас выключить эмоции и оставить только факты, можно ли сказать:
 
 - [ ] проект поднимается одной командой
+- [ ] demo user доступен сразу после старта и не требует ручного наполнения
 - [ ] ключевой happy-path проходит end-to-end
 - [ ] архитектура совпадает с тем, что я рассказываю
 - [ ] документация соответствует проекту

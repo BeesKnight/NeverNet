@@ -7,7 +7,7 @@ Frontend построен на React, TypeScript, Vite, React Router и TanStack
 ## Команды
 
 ```bash
-npm install
+npm ci
 npm run dev
 npm run lint
 npm run typecheck
@@ -35,9 +35,21 @@ Frontend ожидает:
 - отсутствие bearer token в `localStorage` и `Authorization` header;
 - единый error envelope с `code`, `message` и `request_id`.
 
+## Тестовый baseline
+
+Frontend test suite покрывает минимальный smoke/integration baseline для фазы 5:
+
+- login flow;
+- route guards;
+- render `dashboard`;
+- render `events`;
+- render `calendar`;
+- render `reports`;
+- export status UI и download action.
+
 ## Query cache поведение
 
-После фазы 4 клиентский cache настроен так:
+Клиентский cache настроен так:
 
 - default `staleTime` снижен до `5_000` мс;
 - `refetchOnWindowFocus` включен;
@@ -70,3 +82,14 @@ npm run dev
 ```
 
 Vite dev server проксирует `/api` на `VITE_EDGE_API_ORIGIN`, поэтому cookie-based auth flow сохраняется и локально.
+
+Если нужен production-like сценарий с готовым demo dataset, используй корневой compose:
+
+```bash
+docker compose up --build -d
+```
+
+После этого во frontend доступен demo user:
+
+- `demo@eventdesign.local`
+- `DemoPass123!`

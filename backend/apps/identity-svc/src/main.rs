@@ -174,6 +174,7 @@ fn map_settings(settings: UiSettings) -> GrpcUiSettings {
     }
 }
 
+#[allow(clippy::result_large_err)]
 fn parse_uuid(value: &str, field: &str) -> Result<uuid::Uuid, Status> {
     uuid::Uuid::parse_str(value).map_err(|_| Status::invalid_argument(format!("Invalid {field}")))
 }

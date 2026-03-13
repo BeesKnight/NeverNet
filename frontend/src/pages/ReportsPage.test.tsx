@@ -1,4 +1,5 @@
 import { screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ReportsPage } from './ReportsPage'
@@ -46,6 +47,7 @@ vi.mock('../api/client', () => ({
 describe('ReportsPage', () => {
   beforeEach(() => {
     mocks.apiRequest.mockReset()
+    mocks.apiDownload.mockReset()
     mocks.apiRequest.mockImplementation(async (path: string) => {
       if (path === '/categories') {
         return [
@@ -120,11 +122,43 @@ describe('ReportsPage', () => {
           updated_at: '2026-03-13T10:02:00Z',
           finished_at: '2026-03-13T10:02:00Z',
         },
+        {
+          id: 'export-2',
+          user_id: 'user-1',
+          report_type: 'summary',
+          format: 'xlsx',
+          status: 'processing',
+          filters: {},
+          object_key: null,
+          content_type: null,
+          error_message: null,
+          created_at: '2026-03-13T10:05:00Z',
+          started_at: '2026-03-13T10:06:00Z',
+          updated_at: '2026-03-13T10:06:00Z',
+          finished_at: null,
+        },
+        {
+          id: 'export-3',
+          user_id: 'user-1',
+          report_type: 'summary',
+          format: 'pdf',
+          status: 'failed',
+          filters: {},
+          object_key: null,
+          content_type: null,
+          error_message: 'Projection snapshot is not ready yet',
+          created_at: '2026-03-13T10:10:00Z',
+          started_at: '2026-03-13T10:11:00Z',
+          updated_at: '2026-03-13T10:12:00Z',
+          finished_at: '2026-03-13T10:12:00Z',
+        },
       ]
     })
   })
 
-  it('renders report aggregates and preview rows', async () => {
+  it('renders report aggregates, export statuses, and download action', async () => {
+    const user = userEvent.setup()
+
     renderWithProviders(<ReportsPage />)
 
     await waitFor(() => {
@@ -133,5 +167,15 @@ describe('ReportsPage', () => {
 
     expect(screen.getAllByText(/average budget/i).length).toBeGreaterThan(0)
     expect(screen.getByText(/Preview sorted by starts at/i)).toBeInTheDocument()
+    expect(screen.getByText(/still running in the background/i)).toBeInTheDocument()
+    expect(screen.getByText(/failed and remain available for review/i)).toBeInTheDocument()
+    expect(screen.getByText('Projection snapshot is not ready yet')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Download' }))
+
+    expect(mocks.apiDownload).toHaveBeenCalledWith(
+      '/exports/export-1/download',
+      'eventdesign-report-export-1.pdf',
+    )
   })
 })

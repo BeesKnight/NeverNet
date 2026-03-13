@@ -7,6 +7,8 @@ services:
       POSTGRES_DB: eventdesign
       POSTGRES_USER: eventdesign
       POSTGRES_PASSWORD: eventdesign
+    ports:
+      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -285,7 +287,6 @@ services:
       dockerfile: Dockerfile
       args:
         APP_NAME: demo-seed
-    profiles: ["demo"]
     depends_on:
       db:
         condition: service_healthy
@@ -313,6 +314,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      demo-seed:
+        condition: service_completed_successfully
       identity-svc:
         condition: service_healthy
       event-command-svc:

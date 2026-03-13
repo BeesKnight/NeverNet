@@ -1,61 +1,118 @@
 # EventDesign
 
-EventDesign — дипломный full-stack проект для планирования мероприятий, аналитики и асинхронного экспорта отчетов.
+EventDesign — дипломный full-stack проект для планирования мероприятий, dashboard-аналитики, календарного представления и асинхронного экспорта отчетов.
 
-Репозиторий приведен к состоянию фазы 4:
+Репозиторий доведен до состояния фазы 5:
 
-- `edge-api` работает как BFF и browser boundary;
-- прямого domain SQL в `edge-api` больше нет;
+- `frontend` работает только через `edge-api`;
 - внутренние вызовы идут через gRPC в `identity-svc`, `event-command-svc`, `event-query-svc` и `report-svc`;
-- write-side изменения попадают в outbox и дальше в NATS JetStream;
-- dashboard использует projection-backed Redis cache с TTL и event-driven invalidation;
-- calendar и reports preview читают projections без дополнительного server-side cache;
-- browser auth работает через `HttpOnly` cookie и CSRF;
-- HTTP и gRPC цепочка коррелируется через `x-request-id`.
-
-## Состав стека
-
-```text
-frontend
-  -> edge-api
-      -> identity-svc
-      -> event-command-svc
-      -> event-query-svc
-      -> report-svc
-
-write-side
-  -> PostgreSQL
-  -> outbox_events
-  -> worker relay
-  -> NATS JetStream
-  -> projection/export consumers
-
-read-side
-  -> projection tables
-  -> Redis cache for dashboard
-
-exports
-  -> report-svc
-  -> worker
-  -> MinIO
-```
+- write-side изменения публикуются через outbox и `NATS JetStream`;
+- read-heavy экраны читают projection-таблицы;
+- browser auth использует `HttpOnly` cookie и CSRF;
+- compose-подъем автоматически прогоняет `demo-seed`;
+- есть SQL-backed backend tests, frontend integration/smoke tests и `scripts/smoke.sh`.
 
 ## Быстрый старт
 
-Полный compose-стек поднимается одной командой:
+Полный стек поднимается одной командой:
 
 ```bash
 docker compose up --build -d
 ```
 
-Ожидаемая последовательность:
+При обычном старте compose:
 
-1. Поднимаются `db`, `redis`, `nats`, `minio`.
-2. `db-migrator` применяет миграции и завершается.
-3. `infra-bootstrap` создает bucket и JetStream stream/consumers и завершается.
-4. Стартуют внутренние сервисы и `worker`.
-5. После их готовности стартует `edge-api`.
-6. После `edge-api` стартует `frontend`.
+1. Поднимает инфраструктуру `db`, `redis`, `nats`, `minio`.
+2. Прогоняет `db-migrator` и `infra-bootstrap`.
+3. Стартует внутренние сервисы и `worker`.
+4. Прогоняет `demo-seed`.
+5. После успешного seed запускает `edge-api` и `frontend`.
+
+Если нужно повторно восстановить демонстрационный набор данных без полного пересоздания стека:
+
+```bash
+docker compose run --rm demo-seed
+```
+
+## Demo dataset
+
+После штатного `docker compose up --build -d` доступны:
+
+- demo user: `demo@eventdesign.local`
+- пароль: `DemoPass123!`
+- несколько категорий;
+- события с разными статусами;
+- заполненные `dashboard` и `calendar`;
+- история export jobs со статусами `completed` и `queued`.
+
+## Smoke
+
+Минимальный happy-path фиксируется скриптом:
+
+```bash
+scripts/smoke.sh
+```
+
+Smoke script проверяет:
+
+- доступность публичных entrypoint-ов и инфраструктурных health endpoint-ов;
+- CSRF + register;
+- `GET /api/auth/me`;
+- создание категории;
+- создание события;
+- появление события в `events`, `dashboard`, `calendar`;
+- создание export job;
+- переход export в `completed`;
+- download артефакта;
+- logout и инвалидацию сессии.
+
+## Команды проверки
+
+Backend:
+
+```bash
+cd backend
+export DATABASE_URL=postgres://eventdesign:eventdesign@localhost:5432/eventdesign
+cargo fmt --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace --all-features
+cargo audit
+```
+
+Frontend:
+
+```bash
+cd frontend
+npm ci
+npm run lint
+npm run typecheck
+npm run build
+npm test
+```
+
+Полный production-like прогон:
+
+```bash
+docker compose up --build -d
+scripts/smoke.sh
+```
+
+## Структура
+
+```text
+frontend/
+backend/apps/edge-api
+backend/apps/identity-svc
+backend/apps/event-command-svc
+backend/apps/event-query-svc
+backend/apps/report-svc
+backend/apps/worker
+backend/apps/demo-seed
+backend/crates/*
+docs/*
+ops/*
+scripts/*
+```
 
 ## Основные адреса
 
@@ -63,81 +120,27 @@ docker compose up --build -d
 - Edge API: `http://localhost:8080`
 - Edge API health: `http://localhost:8080/healthz`
 - Edge API metrics: `http://localhost:9100/metrics`
+- PostgreSQL: `localhost:5432`
 - Prometheus: `http://localhost:9090`
 - Grafana: `http://localhost:3001`
 - MinIO API: `http://localhost:9000`
 - MinIO Console: `http://localhost:9001`
 - NATS monitor API: `http://localhost:8222`
 
-## Локальная разработка
+## Что важно помнить
 
-Если нужен запуск по частям:
+- `edge-api` не ходит в доменную БД напрямую.
+- `ui_settings` и session validation принадлежат `identity-svc`.
+- dashboard использует Redis только как короткоживущий cache над projection-backed read model.
+- calendar и reports читают projections без отдельного backend cache.
+- async correlation после выхода запроса в outbox по-прежнему опирается на `message_id` и `outbox_event_id`, а не на исходный HTTP `request_id`.
 
-```bash
-docker compose up -d db redis nats minio
-cd backend
-cargo run -p db-migrator
-cargo run -p infra-bootstrap
-cargo run -p identity-svc
-cargo run -p event-command-svc
-cargo run -p event-query-svc
-cargo run -p report-svc
-cargo run -p worker
-cargo run -p edge-api
-cd ../frontend
-npm install
-npm run dev
-```
-
-## Обязательные проверки
-
-Backend:
-
-```bash
-cd backend
-cargo fmt --all
-cargo check --workspace
-```
-
-Frontend:
-
-```bash
-cd frontend
-npm run lint
-npm run typecheck
-npm run build
-npm test
-```
-
-## Что важно знать про фазу 4
-
-- `edge-api` больше не требует `DATABASE_URL` и не зависит от PostgreSQL напрямую.
-- Валидация сессии и работа с `ui_settings` вынесены в `identity-svc`.
-- Ошибки внешнего API возвращаются в едином envelope:
-
-```json
-{
-  "error": {
-    "code": "bad_request",
-    "message": "Человекочитаемое описание",
-    "request_id": "6f4d0d7a-..."
-  }
-}
-```
-
-- `x-request-id` генерируется на HTTP-входе и пробрасывается в gRPC metadata.
-- Во frontend default query cache больше не держит данные свежими 30 секунд; read-side ключи инвалидируются после category/event mutations.
-
-## Ограничения до фазы 5
-
-- `scripts/smoke.sh` еще не добавлен.
-- Полный CI hygiene и `cargo clippy -- -D warnings` остаются задачами следующей фазы.
-- Async request correlation после выхода запроса в outbox по-прежнему опирается на `message_id`/`outbox_event_id`, а не на исходный HTTP `request_id`.
-
-Подробности:
+## Документация
 
 - [docs/architecture.md](docs/architecture.md)
 - [docs/api.md](docs/api.md)
 - [docs/messaging.md](docs/messaging.md)
 - [docs/runbook.md](docs/runbook.md)
 - [docs/demo-script.md](docs/demo-script.md)
+- [docs/review-checklist.md](docs/review-checklist.md)
+- [docs/risk-register.md](docs/risk-register.md)

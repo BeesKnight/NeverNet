@@ -59,25 +59,29 @@
 
 - при необходимости расширить envelope событий или observability pipeline в фазе 5.
 
-### H2. Нет smoke script
+### H2. Smoke script и e2e happy-path
 
-Риск:
+Статус: закрыто.
 
-- end-to-end happy-path еще не зафиксирован одной командой.
+Что сделано:
 
-План:
+- добавлен `scripts/smoke.sh`;
+- smoke script проходит end-to-end на поднятом compose-стеке;
+- smoke покрывает auth bootstrap, category/event flow, projection polling, export completion и logout.
 
-- `scripts/smoke.sh` в фазе 5.
+### H3. Финальный CI hygiene зависит от установленного `cargo-audit`
 
-### H3. Нет финального CI hygiene
+Статус: частично закрыто.
 
-Риск:
+Что сделано:
 
-- регрессии могут проходить, если человек ограничился локальной сборкой.
+- добавлены и выровнены quality gates для `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test`, `npm ci`, `npm run lint`, `npm run typecheck`, `npm run build`, `npm test`;
+- compose-старт и smoke-путь воспроизводимы;
+- SQL-backed backend tests и frontend integration tests проходят.
 
-План:
+Что осталось:
 
-- зафиксировать полный набор quality gates в фазе 5.
+- `cargo audit` требует установленного `cargo-audit` в окружении запуска.
 
 ### M1. Dashboard cache зависит от корректной инвалидации worker-а
 
@@ -93,6 +97,8 @@
 
 ### M2. Worker все еще имеет dead-code warning
 
-Риск:
+Статус: закрыто.
 
-- это не runtime bug, но сигнал, что phase 5 должна дочистить quality baseline.
+Что сделано:
+
+- backend проходит `cargo clippy --workspace --all-targets --all-features -- -D warnings`.

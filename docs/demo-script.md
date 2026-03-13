@@ -16,26 +16,31 @@
 Перед демонстрацией:
 
 - выполнить `docker compose up --build -d`;
-- убедиться, что `frontend`, `edge-api` и metrics endpoints доступны;
-- иметь хотя бы одного пользователя и несколько событий;
-- иметь хотя бы один completed export job.
+- при необходимости обновить dataset командой `docker compose run --rm demo-seed`;
+- убедиться, что `frontend`, `edge-api`, `Prometheus`, `Grafana` доступны;
+- использовать готового demo user `demo@eventdesign.local` / `DemoPass123!`;
+- убедиться, что в системе уже видны категории, события, dashboard, calendar и история export jobs;
+- при желании перед выступлением прогнать `scripts/smoke.sh`.
 
 ## Сценарий
 
 ### 1. Вход
 
 - показать login;
+- нажать `Use demo user`, чтобы не тратить время на ручной ввод;
 - отметить cookie-based auth и CSRF;
 - показать bootstrap current user.
 
 ### 2. Categories
 
-- создать category;
+- показать, что категории уже заполнены demo seed;
+- создать еще одну category;
 - изменить category;
 - отметить, что write-side идет в internal command service.
 
 ### 3. Events
 
+- показать, что в списке уже есть события с разными статусами;
 - создать event;
 - изменить event;
 - удалить event или сменить статус;
@@ -61,7 +66,8 @@
 
 ### 7. Export
 
-- создать export job;
+- показать, что история export jobs уже не пустая;
+- создать новый export job;
 - показать `queued -> processing -> completed`;
 - скачать PDF или XLSX.
 
@@ -85,6 +91,7 @@
 ## Чего не делать
 
 - не показывать пустую систему;
+- не надеяться на ручное наполнение данных под глазами комиссии;
 - не спорить с реальным состоянием кода;
 - не обещать прямой SQL в BFF “только временно”;
 - не тратить много времени на логи без запроса комиссии.

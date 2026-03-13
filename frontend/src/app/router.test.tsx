@@ -6,7 +6,16 @@ import { renderWithProviders } from '../test/test-utils'
 
 const mocks = vi.hoisted(() => ({
   auth: {
-    session: null,
+    session: null as
+      | null
+      | {
+          user: {
+            id: string
+            email: string
+            full_name: string
+            created_at: string
+          }
+        },
     isInitializing: false,
     login: vi.fn(),
     register: vi.fn(),
@@ -54,5 +63,20 @@ describe('AppRoutes', () => {
     renderWithProviders(<AppRoutes defaultAuthenticatedPath="/dashboard" />, '/events')
 
     expect(screen.getByRole('heading', { name: 'Sign in' })).toBeInTheDocument()
+  })
+
+  it('renders protected routes for authenticated users', () => {
+    mocks.auth.session = {
+      user: {
+        id: 'user-1',
+        email: 'demo@eventdesign.local',
+        full_name: 'Demo User',
+        created_at: '2026-03-13T10:00:00Z',
+      },
+    }
+
+    renderWithProviders(<AppRoutes defaultAuthenticatedPath="/dashboard" />, '/events')
+
+    expect(screen.getByText('Events Page')).toBeInTheDocument()
   })
 })

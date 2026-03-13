@@ -275,6 +275,7 @@ async fn write_dashboard_cache(state: &AppState, user_id: Uuid, snapshot: &Dashb
     }
 }
 
+#[allow(clippy::result_large_err)]
 fn parse_event_filters(request: &ListEventsRequest) -> Result<EventFilters, Status> {
     Ok(EventFilters {
         search: normalized(&request.search),
@@ -287,6 +288,7 @@ fn parse_event_filters(request: &ListEventsRequest) -> Result<EventFilters, Stat
     })
 }
 
+#[allow(clippy::result_large_err)]
 fn parse_report_filters(request: &GetReportSummaryRequest) -> Result<EventFilters, Status> {
     Ok(EventFilters {
         search: None,
@@ -308,10 +310,12 @@ fn normalized(value: &str) -> Option<String> {
     }
 }
 
+#[allow(clippy::result_large_err)]
 fn parse_uuid(value: &str, field: &str) -> Result<Uuid, Status> {
     Uuid::parse_str(value).map_err(|_| Status::invalid_argument(format!("Invalid {field}")))
 }
 
+#[allow(clippy::result_large_err)]
 fn optional_uuid(value: &str, field: &str) -> Result<Option<Uuid>, Status> {
     if value.trim().is_empty() {
         Ok(None)
@@ -320,11 +324,13 @@ fn optional_uuid(value: &str, field: &str) -> Result<Option<Uuid>, Status> {
     }
 }
 
+#[allow(clippy::result_large_err)]
 fn parse_date(value: &str, field: &str) -> Result<NaiveDate, Status> {
     NaiveDate::parse_from_str(value, "%Y-%m-%d")
         .map_err(|_| Status::invalid_argument(format!("Invalid {field}")))
 }
 
+#[allow(clippy::result_large_err)]
 fn optional_date(value: &str, field: &str) -> Result<Option<NaiveDate>, Status> {
     if value.trim().is_empty() {
         Ok(None)

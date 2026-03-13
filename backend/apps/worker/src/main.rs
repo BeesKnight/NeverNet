@@ -238,6 +238,7 @@ enum MessageDisposition {
     SkipAck,
 }
 
+#[allow(clippy::large_enum_variant)]
 enum ExportClaim {
     Missing,
     AlreadyProcessed,
@@ -1176,6 +1177,7 @@ async fn refresh_dashboard_projection(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn insert_activity(
     tx: &mut Transaction<'_, Postgres>,
     source_message_id: Uuid,
@@ -1511,6 +1513,38 @@ async fn load_export_job_in_tx(
     )
     .bind(export_id)
     .fetch_optional(&mut **tx)
+    .await?;
+
+    Ok(job)
+}
+
+#[cfg(test)]
+async fn load_export_job(
+    pool: &PgPool,
+    export_id: Uuid,
+) -> Result<Option<ExportJobRow>, WorkerError> {
+    let job = sqlx::query_as::<_, ExportJobRow>(
+        r#"
+        SELECT
+            id,
+            user_id,
+            report_type,
+            format,
+            status,
+            filters,
+            object_key,
+            content_type,
+            error_message,
+            created_at,
+            started_at,
+            updated_at,
+            finished_at
+        FROM export_jobs
+        WHERE id = $1
+        "#,
+    )
+    .bind(export_id)
+    .fetch_optional(pool)
     .await?;
 
     Ok(job)
@@ -1929,6 +1963,104 @@ mod tests {
         .unwrap();
 
         assert_eq!(projection_count, 1);
+        assert_eq!(total_events, 1);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn projection_refresh_is_idempotent_for_redelivery(pool: PgPool) {
+        let user_id = insert_user(&pool).await;
+        let category_id = Uuid::new_v4();
+        let event_id = Uuid::new_v4();
+
+        sqlx::query(
+            r#"
+            INSERT INTO categories (id, user_id, name, color)
+            VALUES ($1, $2, 'Conference', '#0f766e')
+            "#,
+        )
+        .bind(category_id)
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO events (
+                id,
+                user_id,
+                category_id,
+                title,
+                description,
+                location,
+                starts_at,
+                ends_at,
+                budget,
+                status
+            )
+            VALUES (
+                $1,
+                $2,
+                $3,
+                'Idempotent projection',
+                'redelivery safety',
+                'Room 302',
+                '2026-03-16T10:00:00Z',
+                '2026-03-16T12:00:00Z',
+                640.0,
+                'planned'
+            )
+            "#,
+        )
+        .bind(event_id)
+        .bind(user_id)
+        .bind(category_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        for _ in 0..2 {
+            let mut tx = pool.begin().await.unwrap();
+            upsert_event_projection_rows(&mut tx, event_id)
+                .await
+                .expect("projection upsert succeeds");
+            refresh_dashboard_projection(&mut tx, user_id)
+                .await
+                .expect("dashboard refresh succeeds");
+            tx.commit().await.unwrap();
+        }
+
+        let list_projection_count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM event_list_projection WHERE event_id = $1",
+        )
+        .bind(event_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let calendar_projection_count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM calendar_projection WHERE event_id = $1",
+        )
+        .bind(event_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let report_projection_count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM report_projection WHERE event_id = $1",
+        )
+        .bind(event_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let total_events = sqlx::query_scalar::<_, i64>(
+            "SELECT total_events FROM dashboard_projection WHERE user_id = $1",
+        )
+        .bind(user_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(list_projection_count, 1);
+        assert_eq!(calendar_projection_count, 1);
+        assert_eq!(report_projection_count, 1);
         assert_eq!(total_events, 1);
     }
 
