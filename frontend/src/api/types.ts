@@ -56,12 +56,25 @@ export type EventRecord = {
   updated_at: string
 }
 
+export type SortDirection = 'asc' | 'desc'
+
+export type EventSortField =
+  | 'starts_at'
+  | 'ends_at'
+  | 'budget'
+  | 'title'
+  | 'status'
+  | 'updated_at'
+  | 'category_name'
+
 export type EventFilters = {
   search?: string
   status?: string
   category_id?: string
   start_date?: string
   end_date?: string
+  sort_by?: EventSortField
+  sort_dir?: SortDirection
 }
 
 export type CalendarItem = {
@@ -145,4 +158,8 @@ export type ExportJob = {
   started_at: string | null
   updated_at: string
   finished_at: string | null
+}
+
+export type CsrfTokenResponse = {
+  csrf_token: string
 }

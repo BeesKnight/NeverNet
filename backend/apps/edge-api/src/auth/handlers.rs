@@ -10,7 +10,10 @@ use crate::{
     error::AppError,
     shared::{
         api::ApiResponse,
-        auth::{CurrentUser, build_auth_cookie, build_removal_cookie},
+        auth::{
+            CurrentUser, build_auth_cookie, build_csrf_cookie, build_removal_cookie,
+            generate_csrf_token,
+        },
     },
 };
 
@@ -60,10 +63,33 @@ pub async fn me(
     Ok(Json(ApiResponse::new(SessionResponse { user })))
 }
 
+pub async fn csrf(
+    State(state): State<AppState>,
+    jar: CookieJar,
+) -> (CookieJar, Json<ApiResponse<serde_json::Value>>) {
+    let token = generate_csrf_token();
+    let jar = jar.add(build_csrf_cookie(
+        token.clone(),
+        state.config.auth_cookie_secure,
+    ));
+
+    (
+        jar,
+        Json(ApiResponse::new(serde_json::json!({
+            "csrf_token": token,
+        }))),
+    )
+}
+
 pub async fn logout(
     State(state): State<AppState>,
     jar: CookieJar,
-) -> (CookieJar, Json<ApiResponse<&'static str>>) {
+    current_user: Result<CurrentUser, AppError>,
+) -> Result<(CookieJar, Json<ApiResponse<&'static str>>), AppError> {
+    if let Ok(current_user) = current_user {
+        service::logout(&state, &current_user.token).await?;
+    }
+
     let jar = jar.remove(build_removal_cookie(state.config.auth_cookie_secure));
-    (jar, Json(ApiResponse::new("logged_out")))
+    Ok((jar, Json(ApiResponse::new("logged_out"))))
 }

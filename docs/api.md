@@ -4,37 +4,84 @@
 
 This document describes the REST API exposed by Edge API / BFF to the frontend.
 
-The frontend must talk only to this API.
-It must not call internal services directly.
+The frontend talks only to this API.
+It does not call internal services directly.
 
-## Auth model
+## Auth And Browser Security
 
-The target auth model is browser-friendly session auth using HttpOnly cookies.
+The implemented browser auth model is cookie-based session auth:
 
-Frontend requests that require auth must use credentials-enabled fetches.
+- the auth cookie is `eventdesign_session`
+- the browser must send `credentials: include`
+- state-changing requests use a double-submit CSRF token
+- allowed frontend origins come from `FRONTEND_ORIGINS`
+- most responses expose `x-request-id` for correlation
 
-Recommended browser behavior:
-- `credentials: include`
-- CSRF token mechanism for state-changing requests if implemented
+Browser flow:
 
-## Phase 2 compatibility note
+1. `GET /api/auth/csrf`
+2. send `POST`, `PATCH`, or `DELETE` with the returned token in `X-CSRF-Token`
+3. after login or register, continue using the HttpOnly session cookie
 
-The current external API keeps the existing compatibility envelope and field naming:
+Normal browser auth does not use `localStorage` bearer tokens.
 
-- responses are wrapped as `{ "data": ... }`
-- request and response bodies still use existing snake_case fields such as `full_name`, `category_id`, `start_date`, `end_date`, `default_view`, and `report_type`
-- `POST /api/auth/register` and `POST /api/auth/login` set the `eventdesign_session` HttpOnly cookie
-- `GET /api/auth/me` currently returns the authenticated user payload only; settings remain on `GET /api/settings`
-- dashboard, calendar, report summary, and export routes are now served through internal query/report services
+## Common Response And Error Format
 
-## Route groups
+Successful JSON responses use:
+
+```json
+{
+  "data": {}
+}
+```
+
+Error responses use:
+
+```json
+{
+  "error": {
+    "message": "Human readable message"
+  }
+}
+```
+
+Common status codes:
+
+- `400` bad input
+- `401` unauthenticated or CSRF failure
+- `404` resource not found
+- `409` conflict
+- `429` rate limited
+- `500` internal error
+
+Field names are snake_case throughout the public API.
+
+## Route Groups
 
 ### Auth
 
+#### GET /api/auth/csrf
+
+Returns a CSRF token and sets the `eventdesign_csrf` cookie.
+This route is unauthenticated and safe to call before login.
+
+Response:
+
+```json
+{
+  "data": {
+    "csrf_token": "4d1458f4deda4cf6bbd91f7743e0d4b0"
+  }
+}
+```
+
 #### POST /api/auth/register
-Creates a user account.
+
+Creates a user account and sets the `eventdesign_session` HttpOnly cookie.
+Requires a valid CSRF token.
 
 Request:
+
 ```json
 {
   "email": "user@example.com",
@@ -44,6 +91,7 @@ Request:
 ```
 
 Response:
+
 ```json
 {
   "data": {
@@ -58,9 +106,12 @@ Response:
 ```
 
 #### POST /api/auth/login
-Creates a session and sets auth cookie.
+
+Creates a durable session row, sets the `eventdesign_session` HttpOnly cookie, and returns the current user.
+Requires a valid CSRF token.
 
 Request:
+
 ```json
 {
   "email": "user@example.com",
@@ -69,6 +120,7 @@ Request:
 ```
 
 Response:
+
 ```json
 {
   "data": {
@@ -83,9 +135,12 @@ Response:
 ```
 
 #### POST /api/auth/logout
-Clears the current session.
+
+Revokes the current durable session and clears the auth cookie.
+Requires a valid CSRF token.
 
 Response:
+
 ```json
 {
   "data": "logged_out"
@@ -93,9 +148,11 @@ Response:
 ```
 
 #### GET /api/auth/me
-Returns the current authenticated user.
+
+Returns the current authenticated user if the cookie is present and the backing session row is still active.
 
 Response:
+
 ```json
 {
   "data": {
@@ -112,36 +169,47 @@ Response:
 ### Categories
 
 #### GET /api/categories
+
 Returns all categories for the authenticated user.
 
 Response:
+
 ```json
 {
-  "items": [
+  "data": [
     {
       "id": "uuid",
+      "user_id": "uuid",
       "name": "Conference",
-      "color": "#7c3aed"
+      "color": "#0f766e",
+      "created_at": "2026-03-13T10:00:00Z",
+      "updated_at": "2026-03-13T10:00:00Z"
     }
   ]
 }
 ```
 
 #### POST /api/categories
+
 Creates a category.
+Requires a valid CSRF token.
 
 Request:
+
 ```json
 {
   "name": "Conference",
-  "color": "#7c3aed"
+  "color": "#0f766e"
 }
 ```
 
 #### PATCH /api/categories/:id
+
 Updates a category.
+Requires a valid CSRF token.
 
 Request:
+
 ```json
 {
   "name": "Meetup",
@@ -150,88 +218,111 @@ Request:
 ```
 
 #### DELETE /api/categories/:id
-Deletes a category.
+
+Deletes a category owned by the current user.
+Requires a valid CSRF token.
 
 Response:
+
 ```json
 {
-  "ok": true
+  "data": "deleted"
 }
 ```
 
 ### Events
 
 #### GET /api/events
-Returns filtered and sorted events.
+
+Returns filtered and sorted event projection rows for the authenticated user.
 
 Query params may include:
+
 - `search`
 - `status`
-- `categoryId`
-- `dateFrom`
-- `dateTo`
-- `sortBy`
-- `sortDir`
-- `page`
-- `pageSize`
+- `category_id`
+- `start_date`
+- `end_date`
+- `sort_by`
+- `sort_dir`
+
+Supported `sort_by` values:
+
+- `starts_at`
+- `ends_at`
+- `budget`
+- `title`
+- `status`
+- `updated_at`
+- `category_name`
 
 Response:
+
 ```json
 {
-  "items": [
+  "data": [
     {
       "id": "uuid",
-      "title": "Frontend Meetup",
-      "category": {
-        "id": "uuid",
-        "name": "Meetup",
-        "color": "#2563eb"
-      },
-      "location": "Amsterdam",
-      "startsAt": "2026-04-10T18:00:00Z",
-      "endsAt": "2026-04-10T21:00:00Z",
-      "budget": 1200,
-      "status": "planned"
+      "user_id": "uuid",
+      "category_id": "uuid",
+      "category_name": "Conference",
+      "category_color": "#0f766e",
+      "title": "Defense rehearsal",
+      "description": "Dry run",
+      "location": "Room 301",
+      "starts_at": "2026-03-15T10:00:00Z",
+      "ends_at": "2026-03-15T12:00:00Z",
+      "budget": 850.0,
+      "status": "planned",
+      "created_at": "2026-03-13T10:00:00Z",
+      "updated_at": "2026-03-13T10:00:00Z"
     }
-  ],
-  "page": 1,
-  "pageSize": 20,
-  "total": 1
+  ]
 }
 ```
 
 #### GET /api/events/:id
-Returns one event.
+
+Returns one event from the write-side ownership boundary.
 
 #### POST /api/events
+
 Creates an event.
+Requires a valid CSRF token.
 
 Request:
+
 ```json
 {
+  "category_id": "uuid",
   "title": "Frontend Meetup",
   "description": "Community event",
   "location": "Amsterdam",
-  "categoryId": "uuid",
-  "startsAt": "2026-04-10T18:00:00Z",
-  "endsAt": "2026-04-10T21:00:00Z",
+  "starts_at": "2026-04-10T18:00:00Z",
+  "ends_at": "2026-04-10T21:00:00Z",
   "budget": 1200,
   "status": "planned"
 }
 ```
 
 #### PATCH /api/events/:id
+
 Updates an event.
+Requires a valid CSRF token.
 
 #### DELETE /api/events/:id
+
 Deletes an event.
+Requires a valid CSRF token.
 
 ### Dashboard
 
 #### GET /api/dashboard
-Returns dashboard summary data.
+
+Returns projection-backed dashboard cards plus upcoming events and recent activity.
 
 Response:
+
 ```json
 {
   "data": {
@@ -251,13 +342,16 @@ Response:
 ### Calendar
 
 #### GET /api/calendar
-Returns calendar projection data.
+
+Returns calendar projection rows for a date window.
 
 Query params:
-- `month`
-- `year`
+
+- `start_date`
+- `end_date`
 
 Response:
+
 ```json
 {
   "data": [
@@ -277,33 +371,64 @@ Response:
 ### Reports
 
 #### GET /api/reports/summary
-Returns report preview and aggregates.
+
+Returns the report preview, summary cards, grouped aggregates, and sorted preview rows.
 
 Query params may include:
-- `dateFrom`
-- `dateTo`
-- `categoryId`
+
 - `status`
-- `sortBy`
-- `sortDir`
+- `category_id`
+- `start_date`
+- `end_date`
+- `sort_by`
+- `sort_dir`
+
+The current UI uses preview sorting for:
+
+- `starts_at`
+- `title`
+- `category_name`
+- `budget`
+- `status`
+- `updated_at`
 
 Response:
+
 ```json
 {
   "data": {
+    "filters": {
+      "status": "planned",
+      "category_id": null,
+      "start_date": "2026-03-01",
+      "end_date": "2026-03-31",
+      "sort_by": "starts_at",
+      "sort_dir": "asc"
+    },
+    "period_start": "2026-03-01",
+    "period_end": "2026-03-31",
     "total_events": 12,
     "total_budget": 8450,
+    "by_category": [],
+    "by_status": [],
     "events": []
   }
 }
 ```
 
+#### GET /api/reports/by-category
+
+Returns only the grouped category rows for the same filter set.
+
 ### Exports
 
 #### POST /api/exports
-Creates an export job.
+
+Creates an asynchronous export job.
+Requires a valid CSRF token.
 
 Request:
+
 ```json
 {
   "report_type": "summary",
@@ -312,82 +437,84 @@ Request:
     "start_date": "2026-04-01",
     "end_date": "2026-04-30",
     "category_id": null,
-    "status": null
+    "status": null,
+    "sort_by": "starts_at",
+    "sort_dir": "asc"
   }
 }
 ```
 
 Response:
+
 ```json
 {
   "data": {
     "id": "uuid",
-    "status": "queued"
+    "user_id": "uuid",
+    "report_type": "summary",
+    "format": "pdf",
+    "status": "queued",
+    "filters": {},
+    "object_key": null,
+    "content_type": null,
+    "error_message": null,
+    "created_at": "2026-04-10T21:00:00Z",
+    "started_at": null,
+    "updated_at": "2026-04-10T21:00:00Z",
+    "finished_at": null
   }
 }
 ```
 
 #### GET /api/exports
-Returns current user's export jobs.
+
+Returns all export jobs for the current user.
 
 #### GET /api/exports/:id
-Returns one export job status.
 
-Response:
-```json
-{
-  "data": {
-    "id": "uuid",
-    "status": "completed",
-    "format": "pdf",
-    "object_key": "/exports/user-id/uuid.pdf",
-    "content_type": "application/pdf",
-    "finished_at": "2026-04-10T21:05:00Z"
-  }
-}
-```
+Returns one export job owned by the current user.
 
 #### GET /api/exports/:id/download
-Returns or redirects to the export file if ready and authorized.
+
+Streams the export file if the job is completed and belongs to the current user.
 
 ### Settings
 
 #### GET /api/settings
+
 Returns the current user's UI settings.
 
-#### PATCH /api/settings
-Updates UI settings.
-
-Request:
-```json
-{
-  "theme": "dark",
-  "default_view": "dashboard"
-}
-```
-
-## Error contract
-
-Recommended error shape:
+Response:
 
 ```json
 {
-  "error": {
-    "code": "validation_error",
-    "message": "Title is required",
-    "details": {
-      "field": "title"
-    }
+  "data": {
+    "user_id": "uuid",
+    "theme": "system",
+    "accent_color": "#b6532f",
+    "default_view": "dashboard",
+    "created_at": "2026-03-13T10:00:00Z",
+    "updated_at": "2026-03-13T10:00:00Z"
   }
 }
 ```
 
-Guidelines:
-- keep codes stable
-- keep messages human-readable
-- avoid exposing internal stack traces
+#### PATCH /api/settings
 
-## Internal service note
+Updates the current user's UI settings.
+Requires a valid CSRF token.
+
+Request:
+
+```json
+{
+  "theme": "dark",
+  "accent_color": "#0f766e",
+  "default_view": "reports"
+}
+```
+
+## Internal Service Note
 
 These routes are the external contract only.
-Internal gRPC contracts should be designed around service boundaries, not copied 1:1 from the REST surface.
+Internal gRPC contracts follow service boundaries rather than mirroring the REST surface 1:1.

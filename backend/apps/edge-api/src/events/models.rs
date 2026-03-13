@@ -89,4 +89,6 @@ pub struct EventFilters {
     pub category_id: Option<Uuid>,
     pub start_date: Option<NaiveDate>,
     pub end_date: Option<NaiveDate>,
+    pub sort_by: Option<String>,
+    pub sort_dir: Option<String>,
 }

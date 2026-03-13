@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { format } from 'date-fns'
 
 import { apiRequest } from '../api/client'
+import { ErrorState, InlineNotice, LoadingState } from '../components/QueryState'
 import type { DashboardResponse, ExportJob } from '../api/types'
 import { useAuth } from '../features/auth/auth-context'
 
@@ -25,6 +26,38 @@ export function DashboardPage() {
   const upcomingEvents = dashboard?.upcoming ?? []
   const recentActivity = dashboard?.recent_activity ?? []
   const cards = dashboard?.cards
+  const queuedExports = exports.filter((job) => job.status === 'queued').length
+  const processingExports = exports.filter((job) => job.status === 'processing').length
+
+  if ((dashboardQuery.isPending || exportsQuery.isPending) && !dashboard) {
+    return (
+      <LoadingState
+        title="Loading dashboard"
+        detail="Reading cached summary cards, upcoming events, and export job health."
+      />
+    )
+  }
+
+  if (dashboardQuery.isError || exportsQuery.isError) {
+    return (
+      <ErrorState
+        title="Dashboard unavailable"
+        detail="The dashboard summary could not be loaded from the query side."
+        action={
+          <button
+            className="ghost-button"
+            type="button"
+            onClick={() => {
+              void dashboardQuery.refetch()
+              void exportsQuery.refetch()
+            }}
+          >
+            Retry
+          </button>
+        }
+      />
+    )
+  }
 
   return (
     <div className="page-shell">
@@ -59,7 +92,18 @@ export function DashboardPage() {
           <strong>{cards?.cancelled_events ?? 0}</strong>
           <span>Events removed from execution</span>
         </article>
+        <article className="stat-card">
+          <p className="eyebrow">Budget tracked</p>
+          <strong>${(cards?.total_budget ?? 0).toFixed(0)}</strong>
+          <span>Budget attached to all events in scope</span>
+        </article>
       </section>
+
+      <InlineNotice tone={queuedExports || processingExports ? 'success' : 'neutral'}>
+        {queuedExports + processingExports
+          ? `${queuedExports} queued and ${processingExports} processing export jobs are visible from the background pipeline.`
+          : 'The export queue is currently idle.'}
+      </InlineNotice>
 
       <section className="content-grid">
         <article className="section-card">

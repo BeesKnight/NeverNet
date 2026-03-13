@@ -8,7 +8,7 @@ import {
 } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 
-import { ApiError, apiRequest } from '../../api/client'
+import { ApiError, apiRequest, clearCsrfToken, refreshCsrfToken } from '../../api/client'
 import type { AuthResponse, User } from '../../api/types'
 
 type LoginPayload = {
@@ -38,6 +38,12 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
   useEffect(() => {
     let isCancelled = false
+
+    void refreshCsrfToken().catch((error) => {
+      if (!isCancelled) {
+        console.error(error)
+      }
+    })
 
     apiRequest<AuthResponse>('/auth/me')
       .then((nextSession) => {
@@ -77,6 +83,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
           method: 'POST',
           body: JSON.stringify(payload),
         })
+        await refreshCsrfToken(true)
         queryClient.clear()
         setSession(nextSession)
       },
@@ -85,6 +92,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
           method: 'POST',
           body: JSON.stringify(payload),
         })
+        await refreshCsrfToken(true)
         queryClient.clear()
         setSession(nextSession)
       },
@@ -95,7 +103,12 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
         void apiRequest('/auth/logout', {
           method: 'POST',
-        }).catch(() => undefined)
+        })
+          .catch(() => undefined)
+          .finally(() => {
+            clearCsrfToken()
+            void refreshCsrfToken(true).catch(() => undefined)
+          })
       },
       updateUser(user) {
         setSession((current) => {

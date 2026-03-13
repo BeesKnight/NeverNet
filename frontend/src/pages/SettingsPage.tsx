@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { apiRequest } from '../api/client'
+import { ErrorState, InlineNotice, LoadingState } from '../components/QueryState'
 import type { UiSettings } from '../api/types'
 import { useAuth } from '../features/auth/auth-context'
 
@@ -27,6 +28,29 @@ export function SettingsPage() {
 
   const settings = settingsQuery.data
 
+  if (settingsQuery.isPending && !settings) {
+    return (
+      <LoadingState
+        title="Loading settings"
+        detail="Reading the persisted UI profile for this account."
+      />
+    )
+  }
+
+  if (settingsQuery.isError) {
+    return (
+      <ErrorState
+        title="Settings unavailable"
+        detail="The UI preferences could not be loaded for this user."
+        action={
+          <button className="ghost-button" type="button" onClick={() => void settingsQuery.refetch()}>
+            Retry
+          </button>
+        }
+      />
+    )
+  }
+
   return (
     <div className="page-shell two-column-page">
       <section className="section-card">
@@ -36,6 +60,14 @@ export function SettingsPage() {
             <h2>Interface settings</h2>
           </div>
         </div>
+
+        <InlineNotice tone={updateSettings.isError ? 'error' : updateSettings.isPending ? 'success' : 'neutral'}>
+          {updateSettings.isError
+            ? 'The last settings update failed.'
+            : updateSettings.isPending
+              ? 'Saving the new preference set.'
+              : 'Changes are saved immediately.'}
+        </InlineNotice>
 
         <div className="form-grid">
           <label>

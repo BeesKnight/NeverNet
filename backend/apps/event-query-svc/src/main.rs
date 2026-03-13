@@ -45,6 +45,8 @@ impl EventQueryService for EventQueryGrpcService {
         &self,
         request: Request<ListCategoriesRequest>,
     ) -> Result<Response<ListCategoriesReply>, Status> {
+        let span = observability::grpc_request_span("event_query.list_categories", &request);
+        tracing::info!(parent: &span, "grpc request received");
         let user_id = parse_uuid(&request.get_ref().user_id, "user_id")?;
         let items = repository::list_categories(&self.state.pool, user_id)
             .await
@@ -61,6 +63,8 @@ impl EventQueryService for EventQueryGrpcService {
         &self,
         request: Request<ListEventsRequest>,
     ) -> Result<Response<ListEventsReply>, Status> {
+        let span = observability::grpc_request_span("event_query.list_events", &request);
+        tracing::info!(parent: &span, "grpc request received");
         let user_id = parse_uuid(&request.get_ref().user_id, "user_id")?;
         let filters = parse_event_filters(request.get_ref())?;
         let items = repository::list_events(&self.state.pool, user_id, &filters)
@@ -78,6 +82,8 @@ impl EventQueryService for EventQueryGrpcService {
         &self,
         request: Request<GetEventRequest>,
     ) -> Result<Response<EventReply>, Status> {
+        let span = observability::grpc_request_span("event_query.get_event", &request);
+        tracing::info!(parent: &span, "grpc request received");
         let user_id = parse_uuid(&request.get_ref().user_id, "user_id")?;
         let event_id = parse_uuid(&request.get_ref().event_id, "event_id")?;
         let event = repository::get_event(&self.state.pool, user_id, event_id)
@@ -95,6 +101,8 @@ impl EventQueryService for EventQueryGrpcService {
         &self,
         request: Request<GetCalendarRequest>,
     ) -> Result<Response<CalendarReply>, Status> {
+        let span = observability::grpc_request_span("event_query.get_calendar", &request);
+        tracing::info!(parent: &span, "grpc request received");
         let user_id = parse_uuid(&request.get_ref().user_id, "user_id")?;
         let start_date = parse_date(&request.get_ref().start_date, "start_date")?;
         let end_date = parse_date(&request.get_ref().end_date, "end_date")?;
@@ -113,6 +121,8 @@ impl EventQueryService for EventQueryGrpcService {
         &self,
         request: Request<GetDashboardRequest>,
     ) -> Result<Response<DashboardReply>, Status> {
+        let span = observability::grpc_request_span("event_query.get_dashboard", &request);
+        tracing::info!(parent: &span, "grpc request received");
         let user_id = parse_uuid(&request.get_ref().user_id, "user_id")?;
         let snapshot = get_dashboard(&self.state, user_id)
             .await
@@ -133,6 +143,8 @@ impl EventQueryService for EventQueryGrpcService {
         &self,
         request: Request<GetReportSummaryRequest>,
     ) -> Result<Response<ReportSummaryReply>, Status> {
+        let span = observability::grpc_request_span("event_query.get_report_summary", &request);
+        tracing::info!(parent: &span, "grpc request received");
         let user_id = parse_uuid(&request.get_ref().user_id, "user_id")?;
         let filters = parse_report_filters(request.get_ref())?;
         let summary = get_report_summary(&self.state, user_id, filters)
@@ -167,9 +179,10 @@ impl EventQueryService for EventQueryGrpcService {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    observability::init_tracing("event_query_svc=info");
+    observability::init_tracing("event-query-svc", "event_query_svc=info");
 
     let config = Arc::new(Config::from_env()?);
+    observability::spawn_metrics_server("event-query-svc", config.metrics_port);
     let pool = connect_pool(&config.database_url, 10).await?;
     let redis = redis::Client::open(config.redis_url.clone())?;
     let state = AppState::new(pool, redis, config.clone());
@@ -189,8 +202,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 async fn get_dashboard(state: &AppState, user_id: Uuid) -> Result<DashboardSnapshot, AppError> {
     if let Some(snapshot) = read_dashboard_cache(state, user_id).await {
+        observability::observe_cache_result("dashboard", "hit");
         return Ok(snapshot);
     }
+    observability::observe_cache_result("dashboard", "miss");
 
     let cards = repository::get_dashboard_projection(&state.pool, user_id)
         .await?
@@ -267,6 +282,8 @@ fn parse_event_filters(request: &ListEventsRequest) -> Result<EventFilters, Stat
         category_id: optional_uuid(&request.category_id, "category_id")?,
         start_date: optional_date(&request.start_date, "start_date")?,
         end_date: optional_date(&request.end_date, "end_date")?,
+        sort_by: normalized(&request.sort_by),
+        sort_dir: normalized(&request.sort_dir),
     })
 }
 
@@ -277,6 +294,8 @@ fn parse_report_filters(request: &GetReportSummaryRequest) -> Result<EventFilter
         category_id: optional_uuid(&request.category_id, "category_id")?,
         start_date: optional_date(&request.start_date, "start_date")?,
         end_date: optional_date(&request.end_date, "end_date")?,
+        sort_by: normalized(&request.sort_by),
+        sort_dir: normalized(&request.sort_dir),
     })
 }
 

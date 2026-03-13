@@ -4,49 +4,56 @@
 
 EventDesign is a high-load inspired full-stack system for event planning and event operations.
 
-The architecture should look like a production-grade product, while still being practical to implement under deadline pressure.
+The repository has now reached the Phase 3 hardening and defense-polish state:
+- the public surface is a single Edge API / BFF
+- write and read responsibilities are split across internal Rust services
+- major write-side changes flow through an outbox plus NATS JetStream
+- read-heavy screens use projection tables
+- browser auth is cookie-based and CSRF-protected
+- local observability is wired through Prometheus and Grafana
 
-## Phase 2 Status
-
-The repository is currently in the CQRS and async-backbone phase.
+## Phase 3 Status
 
 Implemented now:
 
-- backend workspace split into app crates and shared crates
+- backend workspace split into focused app crates and shared crates
 - `edge-api` is the only published backend entrypoint
-- `identity-svc` is live and handles auth over gRPC
-- frontend auth uses an HttpOnly cookie flow and `credentials: include`
-- Docker Compose starts PostgreSQL, Redis, NATS JetStream, and MinIO
-- `event-command-svc` owns category and event mutations
-- category and event mutations write durable outbox rows in the same transaction
-- worker relays outbox rows to NATS JetStream and retries failed publishes
-- `event-query-svc` serves event list, calendar, dashboard, and report-preview reads
-- read-heavy screens are served from projection tables
+- `identity-svc` persists durable session rows in PostgreSQL and revokes them on logout
+- browser auth uses an HttpOnly `eventdesign_session` cookie and the normal UI flow no longer uses `localStorage` bearer tokens
+- `GET /api/auth/csrf` issues a CSRF token and Edge API enforces double-submit CSRF checks on `POST`, `PATCH`, and `DELETE`
+- CORS is restricted by `FRONTEND_ORIGINS`
+- Edge API rate limits general API traffic and auth traffic separately through Redis counters
+- request ids propagate from incoming HTTP requests into internal gRPC calls
+- each Rust service exposes `/metrics` and `/healthz` on a dedicated metrics port
+- `event-command-svc` owns category and event mutations and writes outbox rows transactionally
+- worker relays outbox rows to NATS JetStream and processes projection and export consumers
+- `event-query-svc` serves event list, calendar, dashboard, and report-summary reads from projections
 - dashboard responses are cached in Redis and invalidated from projection updates
-- `report-svc` owns export job creation, metadata lookup, and MinIO-backed download reads
-- worker processes export jobs asynchronously and uploads generated files to MinIO
+- `report-svc` owns export job creation, metadata lookup, and MinIO-backed downloads
+- `demo-seed` can populate a defense-ready user, categories, events, projections, and export history
+- frontend dashboard, reports, calendar, settings, and auth flows now include stronger loading, empty, and error states
+- backend and frontend tests cover the main product paths
 
-Phase 2 compatibility layers:
+Remaining rough edges:
 
-- `edge-api` still owns the external REST surface and UI-oriented response mapping
-- settings still execute inside `edge-api` until a later migration step
-- identity still uses the Phase 1 signed-cookie session compatibility path
+- settings still execute inside `edge-api`
+- Loki or Promtail is not wired yet; local logs are structured JSON or pretty stdout only
+- full DB-backed backend tests still require a reachable local PostgreSQL and storage stack when run outside Docker Compose
 
 Architecture style:
 
 - React + TypeScript frontend
 - Edge API / BFF as the only public backend entrypoint
-- internal Rust services
+- internal Rust services over gRPC
 - CQRS split for write and read paths
-- async event backbone
-- Redis for cache, rate limiting, short-lived coordination, and locks
+- async event backbone through outbox plus NATS JetStream
 - PostgreSQL as the main source of truth
-- NATS JetStream for domain event delivery
+- Redis for dashboard cache, rate limiting, and worker coordination
 - MinIO/S3-compatible storage for generated export files
 - worker processes for projections and heavy background tasks
-- observability stack for logs, metrics, and tracing
+- local observability stack for logs, metrics, and tracing
 
-## Top-level architecture
+## Top-level Architecture
 
 ```text
 Browser
@@ -54,6 +61,7 @@ Browser
   -> Edge API / BFF
 
 Edge API / BFF
+  -> request ids + CORS + CSRF + Redis rate limiting
   -> Identity Service (gRPC)
   -> Event Command Service (gRPC)
   -> Event Query Service (gRPC)
@@ -61,33 +69,45 @@ Edge API / BFF
   -> settings compatibility module
 
 Identity Service
-  -> PostgreSQL
-  -> signed cookie session compatibility
+  -> PostgreSQL users + sessions
 
-Phase 2 live flow
-  -> Event Command Service -> PostgreSQL write schema + outbox
-  -> Worker outbox relay -> NATS JetStream
-  -> NATS JetStream -> projection worker + export worker
-  -> Event Query Service -> projection/read schema + Redis dashboard cache
-  -> Report Service -> export job metadata + MinIO downloads
+Event Command Service
+  -> PostgreSQL write schema + outbox
+
+Worker
+  -> outbox relay -> NATS JetStream
+  -> projection consumer
+  -> export consumer
+
+Event Query Service
+  -> projection/read schema
+  -> Redis dashboard cache
+
+Report Service
+  -> export job metadata
+  -> MinIO-backed download reads
+
+Observability
+  -> Prometheus scrapes service metrics + NATS varz
+  -> Grafana dashboards
 
 Frontend
   -> communicates only with Edge API / BFF
 ```
 
-## Architectural goals
+## Architectural Goals
 
-The architecture must provide:
+The architecture provides:
 
-- a clean external API for the frontend
+- a stable external API for the frontend
 - separation of authentication from business logic
 - separation of write and read concerns
-- support for fast dashboard / calendar / reporting reads
+- support for fast dashboard, calendar, and reporting reads
 - support for asynchronous report export generation
 - support for future scaling of hot paths
-- strong observability and strong defense value
+- a defense-ready observability and security story
 
-## Main components
+## Main Components
 
 ### Frontend
 
@@ -102,7 +122,8 @@ Frontend responsibilities:
 - settings
 - export job status UI
 
-Frontend must not contain business logic beyond UI behavior and simple input validation.
+Frontend contains UI behavior and client-side request orchestration only.
+It does not call internal services directly.
 
 ### Edge API / BFF
 
@@ -112,10 +133,13 @@ Responsibilities:
 
 - authenticate incoming requests
 - validate and normalize input
+- enforce CSRF checks on state-changing browser requests
+- enforce config-driven CORS
+- apply request correlation and rate limiting
 - provide a stable REST API for the frontend
 - orchestrate calls to internal services
 - hide internal topology from the frontend
-- expose a convenient UI-oriented contract
+- expose UI-oriented response shapes
 
 ### Identity Service
 
@@ -123,21 +147,19 @@ Responsibilities:
 
 - user registration
 - password hashing
-- login / logout
-- session issuing and validation
-- cookie-based authentication support
+- login and logout
+- durable session issuing and validation
 - user profile lookup
 
 ### Event Command Service
 
 Responsibilities:
 
-- create / update / delete categories
-- create / update / delete events
-- ownership checks
-- status transition enforcement
-- write-path business rules
-- writing domain events to outbox
+- create, update, and delete categories
+- create, update, and delete events
+- enforce ownership checks
+- enforce write-path business rules
+- write domain events into the outbox transactionally
 
 ### Event Query Service
 
@@ -148,8 +170,9 @@ Responsibilities:
 - calendar reads
 - filtered and sorted event projections
 - report previews and aggregates
+- dashboard cache usage and invalidation
 
-This service reads from projection tables and optimized read models.
+This service reads from projection tables rather than the write model.
 
 ### Report Service
 
@@ -164,16 +187,15 @@ Responsibilities:
 
 Workers are responsible for:
 
-- relaying outbox rows to JetStream
+- relaying unpublished outbox rows to JetStream
 - consuming domain events
-- updating read models / projections
+- updating read models and recent activity projections
 - invalidating dashboard cache
 - processing export jobs
-- generating PDF / XLSX artifacts
+- generating PDF and XLSX artifacts
 - uploading files to MinIO
-- maintaining activity / audit records
 
-## Data flow types
+## Data Flow Types
 
 ### Synchronous flows
 
@@ -181,6 +203,7 @@ Used for user-facing critical operations:
 
 - register
 - login
+- logout
 - create category
 - create event
 - update event
@@ -193,47 +216,48 @@ Used for user-facing critical operations:
 Used for system decoupling and heavy work:
 
 - projection refresh
-- cache invalidation
+- dashboard cache invalidation
 - export generation
-- activity feed updates
-- audit trail
+- recent activity projection updates
 
-## Why CQRS is used
+## Why CQRS Is Used
 
-CQRS is used to separate:
+CQRS separates:
 
-- **write model** for correctness and transactional safety
-- **read model** for fast UI queries, sorting, filtering, calendar rendering, and reporting
+- the write model for correctness and transactional safety
+- the read model for fast UI queries, sorting, filtering, calendar rendering, and reporting
 
-The project does not use CQRS for theater.
-It uses CQRS because the product has very different write and read access patterns.
+The product has very different write and read access patterns, so the split is practical rather than decorative.
 
-## Why event-driven async flow is used
+## Why Event-Driven Async Flow Is Used
 
 The async event backbone makes it possible to:
 
 - keep write requests fast
 - decouple projection updates from command handling
 - support export processing independently of request latency
-- add additional consumers later without rewriting the write path
+- retry durable publication instead of losing events between DB write and queue publish
 
-## Security model
+## Security Model
 
-Authentication should use:
+Implemented browser security controls:
 
-- secure password hashing
-- HttpOnly cookie-based auth
-- session store in PostgreSQL or Redis-assisted validation
-- ownership checks on all user resources
-- CSRF protection for state-changing requests
-- rate limiting at Edge API
+- Argon2 password hashing
+- HttpOnly `eventdesign_session` cookie
+- `SameSite=Lax` cookies with configurable `Secure`
+- durable `sessions` table in PostgreSQL
+- logout revocation through the session row
+- ownership checks across categories, events, settings, export jobs, and downloads
+- `eventdesign_csrf` cookie plus `X-CSRF-Token` header on state-changing requests
+- CORS restricted to configured `FRONTEND_ORIGINS`
+- Redis-backed Edge API rate limiting for auth and general API windows
+- secrets and service endpoints loaded from environment variables
 
-Phase 1 note:
+Compatibility note:
 
-- the normal browser flow already uses HttpOnly cookies
-- durable session persistence is still a follow-up migration step
+- `Authorization: Bearer` fallback still exists for non-browser tooling, but the browser flow uses cookies only
 
-## Storage model
+## Storage Model
 
 ### PostgreSQL
 
@@ -245,6 +269,7 @@ It stores:
 - sessions
 - categories
 - events
+- ui settings
 - outbox events
 - export jobs
 - read model tables
@@ -253,11 +278,9 @@ It stores:
 
 Redis stores:
 
-- session acceleration and revocation helpers
-- dashboard and report preview caches
+- dashboard cache entries
 - rate-limit counters
-- distributed locks / job ownership hints
-- idempotency keys when needed
+- worker locks and short-lived coordination keys
 
 ### MinIO
 
@@ -265,34 +288,53 @@ MinIO stores:
 
 - generated PDF files
 - generated XLSX files
-- export artifact metadata references
+- export artifact object keys referenced by `export_jobs`
 
 ## Observability
 
-The system should support:
+The local stack now supports:
 
-- structured logs
-- request ids / correlation ids
-- metrics
-- tracing
-- dashboard monitoring
+- structured logs through `tracing` and `tracing-subscriber`
+- request ids and correlation across HTTP and gRPC
+- Prometheus metrics from every Rust service
+- Grafana dashboards provisioned from the repository
 
-Recommended stack:
+Current local observability pieces:
 
-- tracing / tracing-subscriber
-- OpenTelemetry
-- Prometheus
-- Grafana
-- Loki
+- `LOG_FORMAT=json|pretty` switching for service logs
+- `/metrics` and `/healthz` on each Rust service metrics port
+- `x-request-id` on Edge API responses
+- Prometheus scraping:
+  - `edge-api:9100`
+  - `identity-svc:9101`
+  - `event-command-svc:9102`
+  - `event-query-svc:9103`
+  - `report-svc:9104`
+  - `worker:9105`
+  - `nats:8222/varz`
+- Grafana dashboard `EventDesign Overview`
 
-## Development constraints
+Useful metrics currently exposed:
 
-This architecture should look production-grade, but remain implementable.
+- request rate, latency, and status distribution
+- export duration
+- projection lag
+- worker queue lag
+- dashboard cache hit or miss
+- security events such as CSRF rejection, invalid session use, and rate limiting
+
+Current limitation:
+
+- Loki is not part of the local Compose stack yet
+
+## Development Constraints
+
+This architecture should look production-grade while remaining implementable.
 
 Important constraints:
 
 - do not add unnecessary services
-- do not add Kafka if NATS JetStream is enough
+- do not add Kafka when NATS JetStream is sufficient
 - do not create internal frameworks
 - do not replace working components without clear reason
 - keep contracts explicit and documented

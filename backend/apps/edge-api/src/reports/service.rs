@@ -1,6 +1,7 @@
 use chrono::{DateTime, NaiveDate, Utc};
 use contracts::event_query::GetReportSummaryRequest;
 use contracts::event_query::event_query_service_client::EventQueryServiceClient;
+use tonic::transport::Channel;
 use uuid::Uuid;
 
 use crate::{
@@ -8,6 +9,7 @@ use crate::{
     error::AppError,
     events::models::{EventFilters, EventListItem},
     reports::models::{CategoryReportRow, ReportSummary, StatusReportRow},
+    shared::grpc,
 };
 
 pub async fn generate_summary(
@@ -32,6 +34,8 @@ pub async fn generate_summary(
                 .end_date
                 .map(|value| value.to_string())
                 .unwrap_or_default(),
+            sort_by: filters.sort_by.clone().unwrap_or_default(),
+            sort_dir: filters.sort_dir.clone().unwrap_or_default(),
         })
         .await
         .map_err(map_status)?
@@ -83,10 +87,19 @@ pub async fn generate_by_category(
 
 async fn query_client(
     state: &AppState,
-) -> Result<EventQueryServiceClient<tonic::transport::Channel>, AppError> {
-    EventQueryServiceClient::connect(state.config.event_query_service_url.clone())
-        .await
-        .map_err(|error| AppError::Internal(format!("Event query service is unavailable: {error}")))
+) -> Result<
+    EventQueryServiceClient<
+        tonic::service::interceptor::InterceptedService<Channel, grpc::RequestIdInterceptor>,
+    >,
+    AppError,
+> {
+    let channel =
+        grpc::connect_channel(&state.config.event_query_service_url, "Event query service").await?;
+
+    Ok(EventQueryServiceClient::with_interceptor(
+        channel,
+        grpc::RequestIdInterceptor,
+    ))
 }
 
 fn map_event(event: contracts::event_query::EventItem) -> Result<EventListItem, AppError> {

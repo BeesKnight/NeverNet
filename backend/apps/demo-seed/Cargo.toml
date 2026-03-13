@@ -1,0 +1,19 @@
+[package]
+name = "demo-seed"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+argon2.workspace = true
+chrono.workspace = true
+dotenvy.workspace = true
+persistence = { path = "../../crates/persistence" }
+printpdf.workspace = true
+rand_core.workspace = true
+rust_xlsxwriter.workspace = true
+s3.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+uuid.workspace = true

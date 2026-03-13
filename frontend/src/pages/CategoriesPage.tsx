@@ -3,6 +3,7 @@ import { format } from 'date-fns'
 import { useState } from 'react'
 
 import { apiRequest } from '../api/client'
+import { ErrorState, LoadingState } from '../components/QueryState'
 import type { Category } from '../api/types'
 import { CategoryForm } from '../features/categories/CategoryForm'
 import { useAuth } from '../features/auth/auth-context'
@@ -49,6 +50,29 @@ export function CategoriesPage() {
   })
 
   const categories = categoriesQuery.data ?? []
+
+  if (categoriesQuery.isPending && !categories.length) {
+    return (
+      <LoadingState
+        title="Loading categories"
+        detail="Reading the owned category list from the query side."
+      />
+    )
+  }
+
+  if (categoriesQuery.isError) {
+    return (
+      <ErrorState
+        title="Categories unavailable"
+        detail="The category workspace could not be loaded."
+        action={
+          <button className="ghost-button" type="button" onClick={() => void categoriesQuery.refetch()}>
+            Retry
+          </button>
+        }
+      />
+    )
+  }
 
   return (
     <div className="page-shell two-column-page">

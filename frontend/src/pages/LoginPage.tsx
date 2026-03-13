@@ -4,6 +4,9 @@ import { Link, useNavigate } from 'react-router-dom'
 import { ApiError } from '../api/client'
 import { useAuth } from '../features/auth/auth-context'
 
+const DEMO_EMAIL = 'demo@eventdesign.local'
+const DEMO_PASSWORD = 'DemoPass123!'
+
 export function LoginPage() {
   const navigate = useNavigate()
   const auth = useAuth()
@@ -28,7 +31,21 @@ export function LoginPage() {
             <p className="eyebrow">Welcome back</p>
             <h2>Sign in</h2>
           </div>
+          <button
+            className="ghost-button"
+            type="button"
+            onClick={() => {
+              setEmail(DEMO_EMAIL)
+              setPassword(DEMO_PASSWORD)
+            }}
+          >
+            Use demo user
+          </button>
         </div>
+
+        <p className="muted">
+          Demo seed credentials: <strong>{DEMO_EMAIL}</strong> / <strong>{DEMO_PASSWORD}</strong>
+        </p>
 
         <form
           className="form-grid"

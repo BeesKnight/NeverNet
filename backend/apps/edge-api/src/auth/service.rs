@@ -1,16 +1,17 @@
 use chrono::{DateTime, Utc};
 use contracts::identity::identity_service_client::IdentityServiceClient;
 use contracts::identity::{
-    CurrentUserRequest, LoginRequest as IdentityLoginRequest,
-    RegisterRequest as IdentityRegisterRequest,
+    LoginRequest as IdentityLoginRequest, LogoutRequest, RegisterRequest as IdentityRegisterRequest,
 };
+use tonic::transport::Channel;
 use uuid::Uuid;
 
 use crate::{
     app_state::AppState,
     auth::models::{LoginRequest, RegisterRequest},
     error::AppError,
-    users::models::UserProfile,
+    shared::grpc,
+    users::{models::UserProfile, repository as users_repository},
 };
 
 pub struct AuthenticatedSession {
@@ -60,24 +61,42 @@ pub async fn login(
 }
 
 pub async fn get_current_user(state: &AppState, token: &str) -> Result<UserProfile, AppError> {
+    let claims = shared_kernel::auth::decode_token(&state.config.jwt_secret, token)
+        .map_err(|_| AppError::Unauthorized("Invalid or expired token".to_string()))?;
+    let user = users_repository::find_by_id(&state.pool, claims.sub)
+        .await?
+        .ok_or_else(|| AppError::Unauthorized("User session is no longer valid".to_string()))?;
+
+    Ok(user.into())
+}
+
+pub async fn logout(state: &AppState, token: &str) -> Result<(), AppError> {
     let mut client = identity_client(state).await?;
-    let reply = client
-        .get_current_user(CurrentUserRequest {
+    client
+        .logout(LogoutRequest {
             token: token.to_string(),
         })
         .await
-        .map_err(map_identity_status)?
-        .into_inner();
+        .map_err(map_identity_status)?;
 
-    map_identity_user(reply.user)
+    Ok(())
 }
 
 async fn identity_client(
     state: &AppState,
-) -> Result<IdentityServiceClient<tonic::transport::Channel>, AppError> {
-    IdentityServiceClient::connect(state.config.identity_service_url.clone())
-        .await
-        .map_err(|error| AppError::Internal(format!("Identity service is unavailable: {error}")))
+) -> Result<
+    IdentityServiceClient<
+        tonic::service::interceptor::InterceptedService<Channel, grpc::RequestIdInterceptor>,
+    >,
+    AppError,
+> {
+    let channel =
+        grpc::connect_channel(&state.config.identity_service_url, "Identity service").await?;
+
+    Ok(IdentityServiceClient::with_interceptor(
+        channel,
+        grpc::RequestIdInterceptor,
+    ))
 }
 
 fn map_identity_user(user: Option<contracts::identity::User>) -> Result<UserProfile, AppError> {

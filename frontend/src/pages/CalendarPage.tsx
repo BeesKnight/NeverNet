@@ -13,6 +13,7 @@ import {
 import { useMemo, useState } from 'react'
 
 import { apiRequest, buildQueryString } from '../api/client'
+import { ErrorState, InlineNotice, LoadingState } from '../components/QueryState'
 import type { CalendarItem } from '../api/types'
 import { useAuth } from '../features/auth/auth-context'
 
@@ -51,6 +52,29 @@ export function CalendarPage() {
 
   const events = eventsQuery.data ?? []
 
+  if (eventsQuery.isPending && !events.length) {
+    return (
+      <LoadingState
+        title="Loading calendar"
+        detail="Reading the month projection and laying events onto the current grid."
+      />
+    )
+  }
+
+  if (eventsQuery.isError) {
+    return (
+      <ErrorState
+        title="Calendar unavailable"
+        detail="The month view could not be loaded from the calendar projection."
+        action={
+          <button className="ghost-button" type="button" onClick={() => void eventsQuery.refetch()}>
+            Retry
+          </button>
+        }
+      />
+    )
+  }
+
   return (
     <div className="page-shell">
       <section className="section-card">
@@ -73,6 +97,11 @@ export function CalendarPage() {
           </div>
         </div>
 
+        <InlineNotice>
+          {events.length} event{events.length === 1 ? '' : 's'} scheduled between{' '}
+          {format(monthStart, 'MMM d')} and {format(monthEnd, 'MMM d')}.
+        </InlineNotice>
+
         <div className="calendar-grid">
           {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day) => (
             <div className="calendar-head" key={day}>
@@ -82,9 +111,13 @@ export function CalendarPage() {
 
           {calendarDays.map((day) => {
             const dayEvents = events.filter((event) => event.date === format(day, 'yyyy-MM-dd'))
+            const isToday = format(day, 'yyyy-MM-dd') === format(new Date(), 'yyyy-MM-dd')
 
             return (
-              <article className={`calendar-cell${isSameMonth(day, currentMonth) ? '' : ' muted-cell'}`} key={day.toISOString()}>
+              <article
+                className={`calendar-cell${isSameMonth(day, currentMonth) ? '' : ' muted-cell'}${isToday ? ' current-day' : ''}`}
+                key={day.toISOString()}
+              >
                 <header>
                   <strong>{format(day, 'd')}</strong>
                 </header>
@@ -99,11 +132,16 @@ export function CalendarPage() {
                       <strong>{event.title}</strong>
                     </div>
                   ))}
+                  {dayEvents.length > 3 ? (
+                    <div className="calendar-overflow">+{dayEvents.length - 3} more</div>
+                  ) : null}
                 </div>
               </article>
             )
           })}
         </div>
+
+        {!events.length ? <div className="empty-state">No events fall inside this month yet.</div> : null}
       </section>
     </div>
   )

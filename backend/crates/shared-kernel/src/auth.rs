@@ -11,6 +11,7 @@ pub const TOKEN_TTL_SECONDS: usize = 60 * 60 * 24 * 7;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
     pub sub: Uuid,
+    pub sid: Uuid,
     pub exp: usize,
     pub iat: usize,
 }
@@ -23,10 +24,11 @@ pub enum AuthError {
     TokenCreationFailed,
 }
 
-pub fn create_token(secret: &str, user_id: Uuid) -> Result<String, AuthError> {
+pub fn create_token(secret: &str, user_id: Uuid, session_id: Uuid) -> Result<String, AuthError> {
     let now = now_ts();
     let claims = Claims {
         sub: user_id,
+        sid: session_id,
         iat: now,
         exp: now + TOKEN_TTL_SECONDS,
     };

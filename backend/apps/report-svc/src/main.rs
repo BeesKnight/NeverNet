@@ -35,6 +35,8 @@ impl ReportService for ReportGrpcService {
         &self,
         request: Request<CreateExportRequest>,
     ) -> Result<Response<CreateExportReply>, Status> {
+        let span = observability::grpc_request_span("report.create_export", &request);
+        tracing::info!(parent: &span, "grpc request received");
         let user_id = parse_uuid(&request.get_ref().user_id, "user_id")?;
         let filters = parse_filters_json(&request.get_ref().filters_json)?;
         let report_type = request.get_ref().report_type.trim().to_lowercase();
@@ -74,6 +76,8 @@ impl ReportService for ReportGrpcService {
         &self,
         request: Request<ListExportsRequest>,
     ) -> Result<Response<ListExportsReply>, Status> {
+        let span = observability::grpc_request_span("report.list_exports", &request);
+        tracing::info!(parent: &span, "grpc request received");
         let user_id = parse_uuid(&request.get_ref().user_id, "user_id")?;
         let items = repository::list_export_jobs(&self.state.pool, user_id)
             .await
@@ -90,6 +94,8 @@ impl ReportService for ReportGrpcService {
         &self,
         request: Request<GetExportRequest>,
     ) -> Result<Response<GetExportReply>, Status> {
+        let span = observability::grpc_request_span("report.get_export", &request);
+        tracing::info!(parent: &span, "grpc request received");
         let user_id = parse_uuid(&request.get_ref().user_id, "user_id")?;
         let export_id = parse_uuid(&request.get_ref().export_id, "export_id")?;
         let job = repository::get_export_job(&self.state.pool, user_id, export_id)
@@ -107,6 +113,8 @@ impl ReportService for ReportGrpcService {
         &self,
         request: Request<DownloadExportRequest>,
     ) -> Result<Response<DownloadExportReply>, Status> {
+        let span = observability::grpc_request_span("report.download_export", &request);
+        tracing::info!(parent: &span, "grpc request received");
         let user_id = parse_uuid(&request.get_ref().user_id, "user_id")?;
         let export_id = parse_uuid(&request.get_ref().export_id, "export_id")?;
         let job = repository::get_export_job(&self.state.pool, user_id, export_id)
@@ -147,9 +155,10 @@ impl ReportService for ReportGrpcService {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    observability::init_tracing("report_svc=info");
+    observability::init_tracing("report-svc", "report_svc=info");
 
     let config = Arc::new(Config::from_env()?);
+    observability::spawn_metrics_server("report-svc", config.metrics_port);
     let pool = connect_pool(&config.database_url, 10).await?;
     let storage = build_storage_client(&config)?;
     ensure_bucket(&storage, &config.minio_bucket).await;

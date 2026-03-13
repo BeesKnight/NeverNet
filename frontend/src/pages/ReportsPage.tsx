@@ -3,6 +3,7 @@ import { format } from 'date-fns'
 import { useState } from 'react'
 
 import { apiDownload, apiRequest, buildQueryString } from '../api/client'
+import { ErrorState, InlineNotice, LoadingState } from '../components/QueryState'
 import type { Category, EventFilters, ExportJob, ReportSummary } from '../api/types'
 import { useAuth } from '../features/auth/auth-context'
 
@@ -11,6 +12,8 @@ const DEFAULT_FILTERS: EventFilters = {
   category_id: '',
   start_date: '',
   end_date: '',
+  sort_by: 'starts_at',
+  sort_dir: 'asc',
 }
 
 export function ReportsPage() {
@@ -33,6 +36,8 @@ export function ReportsPage() {
           category_id: filters.category_id || undefined,
           start_date: filters.start_date || undefined,
           end_date: filters.end_date || undefined,
+          sort_by: filters.sort_by || undefined,
+          sort_dir: filters.sort_dir || undefined,
         })}`,
       ),
     enabled: Boolean(session?.user.id),
@@ -68,6 +73,41 @@ export function ReportsPage() {
   const report = reportQuery.data
   const categories = categoriesQuery.data ?? []
   const exportJobs = exportsQuery.data ?? []
+  const activeExports = exportJobs.filter((job) => job.status === 'queued' || job.status === 'processing').length
+  const failedExports = exportJobs.filter((job) => job.status === 'failed').length
+  const averageBudget = report?.total_events ? report.total_budget / report.total_events : 0
+  const uniqueCategories = new Set(report?.events.map((event) => event.category_id) ?? []).size
+
+  if ((categoriesQuery.isPending || reportQuery.isPending) && !report) {
+    return (
+      <LoadingState
+        title="Loading reports"
+        detail="Collecting filtered aggregates, sorted preview rows, and export history."
+      />
+    )
+  }
+
+  if (categoriesQuery.isError || reportQuery.isError || exportsQuery.isError) {
+    return (
+      <ErrorState
+        title="Reports unavailable"
+        detail="The reporting view could not read the projection-backed summary."
+        action={
+          <button
+            className="ghost-button"
+            type="button"
+            onClick={() => {
+              void categoriesQuery.refetch()
+              void reportQuery.refetch()
+              void exportsQuery.refetch()
+            }}
+          >
+            Retry
+          </button>
+        }
+      />
+    )
+  }
 
   return (
     <div className="page-shell">
@@ -141,6 +181,40 @@ export function ReportsPage() {
               }
             />
           </label>
+          <label>
+            <span>Sort preview by</span>
+            <select
+              value={filters.sort_by ?? 'starts_at'}
+              onChange={(event) =>
+                setFilters((current) => ({
+                  ...current,
+                  sort_by: event.target.value as NonNullable<EventFilters['sort_by']>,
+                }))
+              }
+            >
+              <option value="starts_at">Start time</option>
+              <option value="title">Title</option>
+              <option value="category_name">Category</option>
+              <option value="budget">Budget</option>
+              <option value="status">Status</option>
+              <option value="updated_at">Last updated</option>
+            </select>
+          </label>
+          <label>
+            <span>Direction</span>
+            <select
+              value={filters.sort_dir ?? 'asc'}
+              onChange={(event) =>
+                setFilters((current) => ({
+                  ...current,
+                  sort_dir: event.target.value as NonNullable<EventFilters['sort_dir']>,
+                }))
+              }
+            >
+              <option value="asc">Ascending</option>
+              <option value="desc">Descending</option>
+            </select>
+          </label>
         </div>
       </section>
 
@@ -155,7 +229,24 @@ export function ReportsPage() {
           <strong>${(report?.total_budget ?? 0).toFixed(2)}</strong>
           <span>Total budget across matching events</span>
         </article>
+        <article className="stat-card">
+          <p className="eyebrow">Average budget</p>
+          <strong>${averageBudget.toFixed(2)}</strong>
+          <span>Average budget per event in preview</span>
+        </article>
+        <article className="stat-card">
+          <p className="eyebrow">Categories</p>
+          <strong>{uniqueCategories}</strong>
+          <span>Distinct categories inside the current scope</span>
+        </article>
       </section>
+
+      <InlineNotice tone={failedExports ? 'error' : activeExports ? 'success' : 'neutral'}>
+        {activeExports
+          ? `${activeExports} export job${activeExports === 1 ? '' : 's'} still running in the background.`
+          : 'No export jobs are currently running.'}
+        {failedExports ? ` ${failedExports} historical export job${failedExports === 1 ? '' : 's'} failed and remain available for review.` : ''}
+      </InlineNotice>
 
       <div className="two-column-page">
         <section className="section-card">
@@ -231,6 +322,10 @@ export function ReportsPage() {
             <h2>Detailed report scope</h2>
           </div>
         </div>
+
+        <InlineNotice>
+          Preview sorted by {(filters.sort_by ?? 'starts_at').replace('_', ' ')} in {filters.sort_dir ?? 'asc'} order.
+        </InlineNotice>
 
         <div className="table-wrap">
           <table>

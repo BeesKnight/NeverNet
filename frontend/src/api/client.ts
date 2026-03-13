@@ -1,6 +1,8 @@
-import type { ApiResponse } from './types'
+import type { ApiResponse, CsrfTokenResponse } from './types'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api'
+let csrfToken: string | null = null
+let pendingCsrfToken: Promise<string> | null = null
 
 export class ApiError extends Error {
   status: number
@@ -13,12 +15,55 @@ export class ApiError extends Error {
 
 type RequestOptions = RequestInit
 
+function isSafeMethod(method?: string) {
+  return !method || ['GET', 'HEAD', 'OPTIONS'].includes(method.toUpperCase())
+}
+
+export async function refreshCsrfToken(force = false): Promise<string> {
+  if (!force && csrfToken) {
+    return csrfToken
+  }
+
+  if (!force && pendingCsrfToken) {
+    return pendingCsrfToken
+  }
+
+  pendingCsrfToken = fetch(`${API_BASE_URL}/auth/csrf`, {
+    credentials: 'include',
+    headers: {
+      Accept: 'application/json',
+    },
+  })
+    .then(async (response) => {
+      if (!response.ok) {
+        throw new ApiError('Could not refresh CSRF token', response.status)
+      }
+
+      const payload = (await response.json()) as ApiResponse<CsrfTokenResponse>
+      csrfToken = payload.data.csrf_token
+      return csrfToken
+    })
+    .finally(() => {
+      pendingCsrfToken = null
+    })
+
+  return pendingCsrfToken
+}
+
+export function clearCsrfToken() {
+  csrfToken = null
+}
+
 export async function apiRequest<T>(
   path: string,
   options: RequestOptions = {},
 ): Promise<T> {
   const headers = new Headers(options.headers)
   headers.set('Accept', 'application/json')
+
+  if (!isSafeMethod(options.method)) {
+    headers.set('X-CSRF-Token', await refreshCsrfToken())
+  }
 
   if (options.body && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json')

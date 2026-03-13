@@ -57,6 +57,8 @@ services:
       DATABASE_URL: postgres://eventdesign:eventdesign@db:5432/eventdesign
       JWT_SECRET: ${JWT_SECRET:-replace-with-a-long-secret}
       GRPC_PORT: 50051
+      METRICS_PORT: 9101
+      LOG_FORMAT: json
       RUST_LOG: identity_svc=info
     restart: unless-stopped
 
@@ -72,6 +74,8 @@ services:
     environment:
       DATABASE_URL: postgres://eventdesign:eventdesign@db:5432/eventdesign
       GRPC_PORT: 50052
+      METRICS_PORT: 9102
+      LOG_FORMAT: json
       RUST_LOG: event_command_svc=info
     restart: unless-stopped
 
@@ -90,6 +94,8 @@ services:
       DATABASE_URL: postgres://eventdesign:eventdesign@db:5432/eventdesign
       REDIS_URL: redis://redis:6379
       GRPC_PORT: 50053
+      METRICS_PORT: 9103
+      LOG_FORMAT: json
       RUST_LOG: event_query_svc=info
     restart: unless-stopped
 
@@ -107,11 +113,13 @@ services:
     environment:
       DATABASE_URL: postgres://eventdesign:eventdesign@db:5432/eventdesign
       GRPC_PORT: 50054
+      METRICS_PORT: 9104
       MINIO_ENDPOINT: http://minio:9000
       MINIO_BUCKET: eventdesign-exports
       MINIO_ACCESS_KEY: eventdesign
       MINIO_SECRET_KEY: eventdesign123
       MINIO_REGION: us-east-1
+      LOG_FORMAT: json
       RUST_LOG: report_svc=info
     restart: unless-stopped
 
@@ -134,13 +142,36 @@ services:
       DATABASE_URL: postgres://eventdesign:eventdesign@db:5432/eventdesign
       REDIS_URL: redis://redis:6379
       NATS_URL: nats://nats:4222
+      METRICS_PORT: 9105
       MINIO_ENDPOINT: http://minio:9000
       MINIO_BUCKET: eventdesign-exports
       MINIO_ACCESS_KEY: eventdesign
       MINIO_SECRET_KEY: eventdesign123
       MINIO_REGION: us-east-1
+      LOG_FORMAT: json
       RUST_LOG: worker=info
     restart: unless-stopped
+
+  demo-seed:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        APP_NAME: demo-seed
+    profiles: ["demo"]
+    depends_on:
+      db:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgres://eventdesign:eventdesign@db:5432/eventdesign
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_BUCKET: eventdesign-exports
+      MINIO_ACCESS_KEY: eventdesign
+      MINIO_SECRET_KEY: eventdesign123
+      MINIO_REGION: us-east-1
+    restart: "no"
 
   edge-api:
     build:
@@ -161,14 +192,20 @@ services:
         condition: service_started
     environment:
       DATABASE_URL: postgres://eventdesign:eventdesign@db:5432/eventdesign
+      REDIS_URL: redis://redis:6379
       JWT_SECRET: ${JWT_SECRET:-replace-with-a-long-secret}
       PORT: 8080
+      METRICS_PORT: 9100
       IDENTITY_SERVICE_URL: http://identity-svc:50051
       EVENT_COMMAND_SERVICE_URL: http://event-command-svc:50052
       EVENT_QUERY_SERVICE_URL: http://event-query-svc:50053
       REPORT_SERVICE_URL: http://report-svc:50054
       FRONTEND_ORIGINS: http://localhost:3000,http://localhost:5173
       AUTH_COOKIE_SECURE: "false"
+      RATE_LIMIT_WINDOW_SECONDS: 60
+      RATE_LIMIT_REQUESTS_PER_WINDOW: 300
+      AUTH_RATE_LIMIT_REQUESTS_PER_WINDOW: 20
+      LOG_FORMAT: json
       RUST_LOG: edge_api=info,tower_http=info
     ports:
       - "8080:8080"
@@ -186,6 +223,33 @@ services:
       - "3000:80"
     restart: unless-stopped
 
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+    volumes:
+      - ./ops/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:12.2.0
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - ./ops/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./ops/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3001:3000"
+    restart: unless-stopped
+
 volumes:
   postgres_data:
+  grafana_data:
   minio_data:

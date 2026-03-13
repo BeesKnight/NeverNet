@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_nats::jetstream::{
     self,
@@ -51,6 +51,7 @@ struct Config {
     database_url: String,
     cache: CacheConfig,
     messaging: MessagingConfig,
+    metrics_port: u16,
     minio_endpoint: String,
     minio_bucket: String,
     minio_access_key: String,
@@ -67,6 +68,10 @@ impl Config {
                 .map_err(|_| WorkerError::Config("DATABASE_URL is required".to_string()))?,
             cache: CacheConfig::from_env(),
             messaging: MessagingConfig::from_env(),
+            metrics_port: std::env::var("METRICS_PORT")
+                .ok()
+                .and_then(|value| value.parse::<u16>().ok())
+                .unwrap_or(9105),
             minio_endpoint: std::env::var("MINIO_ENDPOINT")
                 .unwrap_or_else(|_| "http://127.0.0.1:9000".to_string()),
             minio_bucket: std::env::var("MINIO_BUCKET")
@@ -235,9 +240,10 @@ enum MessageDisposition {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    observability::init_tracing("worker=info");
+    observability::init_tracing("worker", "worker=info");
 
     let config = Config::from_env()?;
+    observability::spawn_metrics_server("worker", config.metrics_port);
     let pool = connect_pool(&config.database_url, 10).await?;
     let redis = redis::Client::open(config.cache.redis_url.clone())?;
     let nats = async_nats::connect(config.messaging.nats_url.clone()).await?;
@@ -456,6 +462,12 @@ async fn process_projection_message(
             return Ok(MessageDisposition::Ack);
         }
     };
+    let lag_seconds = (Utc::now() - envelope.occurred_at)
+        .num_milliseconds()
+        .max(0) as f64
+        / 1_000.0;
+    observability::set_projection_lag("read_models", lag_seconds);
+    observability::set_queue_lag("projection_consumer", lag_seconds);
 
     let mut tx = state.pool.begin().await?;
     if !claim_processed_message(&mut tx, PROJECTION_CONSUMER, message_id).await? {
@@ -610,11 +622,17 @@ async fn process_export_message(
             return Ok(MessageDisposition::Ack);
         }
     };
+    let queue_lag_seconds = (Utc::now() - envelope.occurred_at)
+        .num_milliseconds()
+        .max(0) as f64
+        / 1_000.0;
+    observability::set_queue_lag("export_consumer", queue_lag_seconds);
 
     let export_lock = match acquire_export_lock(&state.redis, payload.export_id).await? {
         Some(lock) => lock,
         None => return Ok(MessageDisposition::SkipAck),
     };
+    let started_at = Instant::now();
 
     let result: Result<MessageDisposition, WorkerError> = async {
         let job = load_export_job(&state.pool, payload.export_id)
@@ -645,9 +663,17 @@ async fn process_export_message(
     release_export_lock(&state.redis, export_lock).await;
 
     match result {
-        Ok(disposition) => Ok(disposition),
+        Ok(disposition) => {
+            observability::observe_export_duration(
+                &payload.format,
+                "completed",
+                started_at.elapsed(),
+            );
+            Ok(disposition)
+        }
         Err(error) => {
             tracing::error!("export {} failed: {}", payload.export_id, error);
+            observability::observe_export_duration(&payload.format, "failed", started_at.elapsed());
             if let Err(mark_error) =
                 mark_export_failed(&state.pool, payload.export_id, &error.to_string()).await
             {
@@ -1602,4 +1628,156 @@ async fn upload_export_artifact(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use sqlx::PgPool;
+
+    use super::*;
+
+    async fn insert_user(pool: &PgPool) -> Uuid {
+        let user_id = Uuid::new_v4();
+        sqlx::query(
+            r#"
+            INSERT INTO users (id, email, password_hash, full_name)
+            VALUES ($1, 'worker@eventdesign.local', 'hash', 'Worker User')
+            "#,
+        )
+        .bind(user_id)
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO ui_settings (user_id, theme)
+            VALUES ($1, 'system')
+            "#,
+        )
+        .bind(user_id)
+        .execute(pool)
+        .await
+        .unwrap();
+        user_id
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn projection_helpers_refresh_read_models(pool: PgPool) {
+        let user_id = insert_user(&pool).await;
+        let category_id = Uuid::new_v4();
+        let event_id = Uuid::new_v4();
+
+        sqlx::query(
+            r#"
+            INSERT INTO categories (id, user_id, name, color)
+            VALUES ($1, $2, 'Conference', '#0f766e')
+            "#,
+        )
+        .bind(category_id)
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO events (
+                id,
+                user_id,
+                category_id,
+                title,
+                description,
+                location,
+                starts_at,
+                ends_at,
+                budget,
+                status
+            )
+            VALUES (
+                $1,
+                $2,
+                $3,
+                'Defense rehearsal',
+                'dry run',
+                'Room 301',
+                '2026-03-15T10:00:00Z',
+                '2026-03-15T12:00:00Z',
+                850.0,
+                'planned'
+            )
+            "#,
+        )
+        .bind(event_id)
+        .bind(user_id)
+        .bind(category_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let mut tx = pool.begin().await.unwrap();
+        upsert_event_projection_rows(&mut tx, event_id)
+            .await
+            .expect("projection upsert succeeds");
+        refresh_dashboard_projection(&mut tx, user_id)
+            .await
+            .expect("dashboard refresh succeeds");
+        tx.commit().await.unwrap();
+
+        let projection_count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM event_list_projection WHERE event_id = $1",
+        )
+        .bind(event_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let total_events = sqlx::query_scalar::<_, i64>(
+            "SELECT total_events FROM dashboard_projection WHERE user_id = $1",
+        )
+        .bind(user_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(projection_count, 1);
+        assert_eq!(total_events, 1);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn export_job_lifecycle_updates_status(pool: PgPool) {
+        let user_id = insert_user(&pool).await;
+        let export_id = Uuid::new_v4();
+
+        sqlx::query(
+            r#"
+            INSERT INTO export_jobs (id, user_id, report_type, format, status, filters)
+            VALUES ($1, $2, 'summary', 'pdf', 'queued', '{}'::jsonb)
+            "#,
+        )
+        .bind(export_id)
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        mark_export_processing(&pool, export_id)
+            .await
+            .expect("queued job becomes processing");
+        let processing_job = load_export_job(&pool, export_id).await.unwrap().unwrap();
+        assert_eq!(processing_job.status, "processing");
+
+        let artifact = ExportArtifact {
+            object_key: "/exports/demo/report.pdf".to_string(),
+            content_type: "application/pdf",
+            bytes: vec![1, 2, 3],
+        };
+        mark_export_completed(&pool, &processing_job, &artifact)
+            .await
+            .expect("processing job becomes completed");
+        let completed_job = load_export_job(&pool, export_id).await.unwrap().unwrap();
+
+        assert_eq!(completed_job.status, "completed");
+        assert_eq!(
+            completed_job.object_key.as_deref(),
+            Some("/exports/demo/report.pdf")
+        );
+    }
 }

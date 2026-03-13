@@ -16,6 +16,8 @@ pub enum AppError {
     #[error("{0}")]
     Conflict(String),
     #[error("{0}")]
+    RateLimited(String),
+    #[error("{0}")]
     Config(String),
     #[error("{0}")]
     Internal(String),
@@ -44,6 +46,7 @@ impl IntoResponse for AppError {
             AppError::Unauthorized(_) => StatusCode::UNAUTHORIZED,
             AppError::NotFound(_) => StatusCode::NOT_FOUND,
             AppError::Conflict(_) => StatusCode::CONFLICT,
+            AppError::RateLimited(_) => StatusCode::TOO_MANY_REQUESTS,
             AppError::Config(_) | AppError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
             AppError::Database(_) | AppError::Migration(_) | AppError::Io(_) => {
                 StatusCode::INTERNAL_SERVER_ERROR

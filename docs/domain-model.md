@@ -1,15 +1,16 @@
 # Domain Model
 
-## Product summary
+## Product Summary
 
 EventDesign is an event planning and operations system.
 
 Users manage their own categories and events.
-They can track statuses, filter and sort events, view calendar data, generate reports, and export reports to PDF/XLSX.
+They can track statuses, filter and sort events, view calendar data, generate reports, and export reports to PDF or XLSX.
 
-## Bounded contexts
+## Bounded Contexts
 
 ### Identity
+
 Handles:
 
 - users
@@ -18,6 +19,7 @@ Handles:
 - authorization context
 
 ### Event Management
+
 Handles:
 
 - categories
@@ -27,28 +29,33 @@ Handles:
 - event lifecycle
 
 ### Reporting
+
 Handles:
 
 - report previews
-- aggregates
+- grouped aggregates
 - export jobs
+- export history
 - generated artifacts
 
 ### Preferences
+
 Handles:
 
 - UI theme
-- default page / default view
+- accent color
+- default page or default view
 - other persistent user UI preferences
 
 ### Activity
+
 Handles:
 
 - recent actions
-- audit-like user-visible timeline
-- event mutation history projections if implemented
+- user-visible timeline entries
+- event mutation history projections
 
-## Core entities
+## Core Entities
 
 ### User
 
@@ -57,7 +64,7 @@ Fields:
 - id
 - email
 - password_hash
-- display_name
+- full_name
 - created_at
 - updated_at
 
@@ -65,7 +72,7 @@ Rules:
 
 - email must be unique
 - password must never be stored in plain text
-- a user owns categories, events, settings, and export jobs
+- a user owns categories, events, settings, sessions, and export jobs
 
 ### Session
 
@@ -73,19 +80,20 @@ Fields:
 
 - id
 - user_id
-- refresh_token_hash or session_secret_hash
 - created_at
 - expires_at
 - revoked_at
 - user_agent
-- ip_address (optional if needed)
+- ip_address
 
 Rules:
 
 - sessions belong to users
-- revoked sessions are invalid
-- session validation must support logout and cookie revocation
-- Phase 1 compatibility currently uses a signed HttpOnly cookie and defers durable session persistence
+- sessions are persisted in PostgreSQL
+- the browser cookie carries a JWT with the user id plus the session id claim
+- the session row remains the source of truth for logout and revocation
+- revoked or expired sessions are invalid
+- normal browser auth does not rely on `localStorage` bearer tokens
 
 ### Category
 
@@ -100,9 +108,9 @@ Fields:
 
 Rules:
 
-- category names should be unique per user where practical
+- category names are unique per user
 - categories are user-scoped
-- deleting a category must have a defined behavior for related events
+- deleting a category that is still referenced by events is blocked by the write model
 
 ### Event
 
@@ -118,15 +126,13 @@ Fields:
 - ends_at
 - budget
 - status
-- priority (optional but recommended)
-- expected_attendees (optional but recommended)
 - created_at
 - updated_at
 
 Rules:
 
 - an event belongs to exactly one user
-- an event may belong to one category
+- an event belongs to exactly one category
 - start time must be before end time
 - status must be valid
 - ownership must always be enforced
@@ -139,12 +145,13 @@ Fields:
 - theme
 - accent_color
 - default_view
+- created_at
 - updated_at
 
 Rules:
 
-- exactly one settings record per user
-- should be returned as part of authenticated UI bootstrap when useful
+- exactly one settings record exists per user
+- settings are user-scoped like the rest of the product
 
 ### Export Job
 
@@ -155,21 +162,23 @@ Fields:
 - report_type
 - format
 - status
-- filters_json
+- filters
 - object_key
 - content_type
 - error_message
 - created_at
 - started_at
+- updated_at
 - finished_at
 
 Rules:
 
 - export jobs belong to a user
-- export jobs must survive API process restarts
-- generated file metadata must not rely only on local container filesystem
+- export jobs survive API process restarts
+- generated file metadata does not rely on local container filesystem paths
+- supported job states are `queued`, `processing`, `completed`, and `failed`
 
-## Event statuses
+## Event Statuses
 
 Supported statuses:
 
@@ -185,9 +194,7 @@ Recommended transition policy:
 - in_progress -> completed
 - in_progress -> cancelled
 
-Avoid magic transitions unless explicitly documented.
-
-## Main user capabilities
+## Main User Capabilities
 
 A user must be able to:
 
@@ -198,35 +205,42 @@ A user must be able to:
 - view a calendar of events
 - see dashboard summaries
 - view reports by period and category
-- export reports to PDF/XLSX
+- export reports to PDF or XLSX
 - configure interface settings
 
-## Read model projections
-
-Recommended read-side projections:
+## Read Model Projections
 
 ### event_list_projection
+
 Purpose:
+
 - power filtered and sorted event list UI
 
-Fields may include:
+Fields:
+
 - event_id
 - user_id
-- title
+- category_id
 - category_name
 - category_color
-- status
+- title
+- description
+- location
 - starts_at
 - ends_at
 - budget
-- location
+- status
+- created_at
 - updated_at
 
 ### calendar_projection
-Purpose:
-- power month/week calendar rendering
 
-Fields may include:
+Purpose:
+
+- power month calendar rendering
+
+Fields:
+
 - event_id
 - user_id
 - date_bucket
@@ -235,12 +249,16 @@ Fields may include:
 - ends_at
 - status
 - category_color
+- updated_at
 
 ### dashboard_projection
+
 Purpose:
+
 - power dashboard cards and upcoming event summaries
 
-Fields may include:
+Fields:
+
 - user_id
 - total_events
 - upcoming_events
@@ -250,21 +268,50 @@ Fields may include:
 - updated_at
 
 ### report_projection
-Purpose:
-- power report preview screens and exports
 
-Fields may include denormalized event data optimized for report filters.
+Purpose:
+
+- power report preview screens, sorting, grouped summaries, and exports
+
+Fields:
+
+- event_id
+- user_id
+- category_id
+- category_name
+- category_color
+- title
+- description
+- location
+- starts_at
+- ends_at
+- budget
+- status
+- created_at
+- updated_at
 
 ### recent_activity_projection
+
 Purpose:
-- power recent actions widget / timeline
 
-## Domain events
+- power the recent activity widget on the dashboard
 
-Important domain events include:
+Fields:
 
-- user.registered
-- user.logged_in
+- id
+- source_message_id
+- user_id
+- entity_type
+- entity_id
+- action
+- title
+- occurred_at
+- created_at
+
+## Domain Events
+
+Current async event families include:
+
 - category.created
 - category.updated
 - category.deleted
@@ -277,16 +324,19 @@ Important domain events include:
 - export.completed
 - export.failed
 
-## Ownership model
+Auth lifecycle remains synchronous through `identity-svc`; login and logout are enforced through durable sessions rather than the async backbone.
 
-Every user-scoped resource must be checked against the authenticated user id.
+## Ownership Model
+
+Every user-scoped resource is checked against the authenticated user id.
 
 This applies to:
 
 - categories
 - events
 - settings
+- sessions
 - export jobs
 - generated exports
 
-Never rely only on client-side filtering for access control.
+Never rely on client-side filtering for access control.

@@ -84,6 +84,8 @@ message ListEventsRequest {
   string category_id = 4;
   string start_date = 5;
   string end_date = 6;
+  string sort_by = 7;
+  string sort_dir = 8;
 }
 
 message ListEventsReply {
@@ -125,6 +127,8 @@ message GetReportSummaryRequest {
   string status = 3;
   string start_date = 4;
   string end_date = 5;
+  string sort_by = 6;
+  string sort_dir = 7;
 }
 
 message ReportSummaryReply {

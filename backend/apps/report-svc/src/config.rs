@@ -6,6 +6,7 @@ use crate::error::AppError;
 pub struct Config {
     pub database_url: String,
     pub grpc_port: u16,
+    pub metrics_port: u16,
     pub minio_endpoint: String,
     pub minio_bucket: String,
     pub minio_access_key: String,
@@ -23,6 +24,10 @@ impl Config {
                 .ok()
                 .and_then(|value| value.parse::<u16>().ok())
                 .unwrap_or(50054),
+            metrics_port: env::var("METRICS_PORT")
+                .ok()
+                .and_then(|value| value.parse::<u16>().ok())
+                .unwrap_or(9104),
             minio_endpoint: env::var("MINIO_ENDPOINT")
                 .unwrap_or_else(|_| "http://127.0.0.1:9000".to_string()),
             minio_bucket: env::var("MINIO_BUCKET")

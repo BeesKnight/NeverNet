@@ -8,12 +8,14 @@ use contracts::event_query::event_query_service_client::EventQueryServiceClient;
 use contracts::event_query::{
     GetEventRequest as QueryGetEventRequest, ListEventsRequest as QueryListEventsRequest,
 };
+use tonic::transport::Channel;
 use uuid::Uuid;
 
 use crate::{
     app_state::AppState,
     error::AppError,
     events::models::{CreateEventRequest, Event, EventFilters, EventListItem, UpdateEventRequest},
+    shared::grpc,
 };
 
 pub async fn list(
@@ -39,6 +41,8 @@ pub async fn list(
                 .end_date
                 .map(|value| value.to_string())
                 .unwrap_or_default(),
+            sort_by: filters.sort_by.unwrap_or_default(),
+            sort_dir: filters.sort_dir.unwrap_or_default(),
         })
         .await
         .map_err(map_status)?
@@ -153,20 +157,39 @@ pub async fn delete(state: &AppState, user_id: Uuid, event_id: Uuid) -> Result<(
 
 async fn command_client(
     state: &AppState,
-) -> Result<EventCommandServiceClient<tonic::transport::Channel>, AppError> {
-    EventCommandServiceClient::connect(state.config.event_command_service_url.clone())
-        .await
-        .map_err(|error| {
-            AppError::Internal(format!("Event command service is unavailable: {error}"))
-        })
+) -> Result<
+    EventCommandServiceClient<
+        tonic::service::interceptor::InterceptedService<Channel, grpc::RequestIdInterceptor>,
+    >,
+    AppError,
+> {
+    let channel = grpc::connect_channel(
+        &state.config.event_command_service_url,
+        "Event command service",
+    )
+    .await?;
+
+    Ok(EventCommandServiceClient::with_interceptor(
+        channel,
+        grpc::RequestIdInterceptor,
+    ))
 }
 
 async fn query_client(
     state: &AppState,
-) -> Result<EventQueryServiceClient<tonic::transport::Channel>, AppError> {
-    EventQueryServiceClient::connect(state.config.event_query_service_url.clone())
-        .await
-        .map_err(|error| AppError::Internal(format!("Event query service is unavailable: {error}")))
+) -> Result<
+    EventQueryServiceClient<
+        tonic::service::interceptor::InterceptedService<Channel, grpc::RequestIdInterceptor>,
+    >,
+    AppError,
+> {
+    let channel =
+        grpc::connect_channel(&state.config.event_query_service_url, "Event query service").await?;
+
+    Ok(EventQueryServiceClient::with_interceptor(
+        channel,
+        grpc::RequestIdInterceptor,
+    ))
 }
 
 fn map_query_event(event: contracts::event_query::EventItem) -> Result<EventListItem, AppError> {

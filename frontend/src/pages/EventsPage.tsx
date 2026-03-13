@@ -3,6 +3,7 @@ import { format } from 'date-fns'
 import { useState } from 'react'
 
 import { apiRequest, buildQueryString } from '../api/client'
+import { ErrorState, InlineNotice, LoadingState } from '../components/QueryState'
 import type { Category, Event, EventFilters, EventRecord } from '../api/types'
 import { useAuth } from '../features/auth/auth-context'
 import { EventForm } from '../features/events/EventForm'
@@ -24,6 +25,8 @@ const DEFAULT_FILTERS: EventFilters = {
   category_id: '',
   start_date: '',
   end_date: '',
+  sort_by: 'starts_at',
+  sort_dir: 'asc',
 }
 
 export function EventsPage() {
@@ -48,6 +51,8 @@ export function EventsPage() {
           category_id: filters.category_id || undefined,
           start_date: filters.start_date || undefined,
           end_date: filters.end_date || undefined,
+          sort_by: filters.sort_by || undefined,
+          sort_dir: filters.sort_dir || undefined,
         })}`,
       ),
     enabled: Boolean(session?.user.id),
@@ -85,6 +90,34 @@ export function EventsPage() {
 
   const categories = categoriesQuery.data ?? []
   const events = eventsQuery.data ?? []
+  const hasLoadingState = (categoriesQuery.isPending || eventsQuery.isPending) && !categories.length && !events.length
+  const hasErrorState = categoriesQuery.isError || eventsQuery.isError
+
+  if (hasLoadingState) {
+    return (
+      <LoadingState
+        title="Loading events"
+        detail="Syncing categories, filters, and projection-backed event rows."
+      />
+    )
+  }
+
+  if (hasErrorState) {
+    return (
+      <ErrorState
+        title="Events unavailable"
+        detail="The event list could not be loaded from the query side."
+        action={
+          <button className="ghost-button" type="button" onClick={() => {
+            void categoriesQuery.refetch()
+            void eventsQuery.refetch()
+          }}>
+            Retry
+          </button>
+        }
+      />
+    )
+  }
 
   return (
     <div className="page-shell">
@@ -154,6 +187,41 @@ export function EventsPage() {
               }
             />
           </label>
+          <label>
+            <span>Sort by</span>
+            <select
+              value={filters.sort_by ?? 'starts_at'}
+              onChange={(event) =>
+                setFilters((current) => ({
+                  ...current,
+                  sort_by: event.target.value as NonNullable<EventFilters['sort_by']>,
+                }))
+              }
+            >
+              <option value="starts_at">Start time</option>
+              <option value="ends_at">End time</option>
+              <option value="title">Title</option>
+              <option value="category_name">Category</option>
+              <option value="budget">Budget</option>
+              <option value="status">Status</option>
+              <option value="updated_at">Last updated</option>
+            </select>
+          </label>
+          <label>
+            <span>Direction</span>
+            <select
+              value={filters.sort_dir ?? 'asc'}
+              onChange={(event) =>
+                setFilters((current) => ({
+                  ...current,
+                  sort_dir: event.target.value as NonNullable<EventFilters['sort_dir']>,
+                }))
+              }
+            >
+              <option value="asc">Ascending</option>
+              <option value="desc">Descending</option>
+            </select>
+          </label>
         </div>
       </section>
 
@@ -185,6 +253,11 @@ export function EventsPage() {
               <h2>Tracked events</h2>
             </div>
           </div>
+
+          <InlineNotice>
+            {events.length} result{events.length === 1 ? '' : 's'} sorted by{' '}
+            {(filters.sort_by ?? 'starts_at').replace('_', ' ')} in {filters.sort_dir ?? 'asc'} order.
+          </InlineNotice>
 
           <div className="table-wrap">
             <table>

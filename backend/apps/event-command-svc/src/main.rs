@@ -42,6 +42,8 @@ impl EventCommandService for EventCommandGrpcService {
         &self,
         request: Request<CreateCategoryRequest>,
     ) -> Result<Response<CategoryReply>, Status> {
+        let span = observability::grpc_request_span("event_command.create_category", &request);
+        tracing::info!(parent: &span, "grpc request received");
         let user_id = parse_uuid(&request.get_ref().user_id, "user_id")?;
         let category = create_category(
             &self.state.pool,
@@ -61,6 +63,8 @@ impl EventCommandService for EventCommandGrpcService {
         &self,
         request: Request<UpdateCategoryRequest>,
     ) -> Result<Response<CategoryReply>, Status> {
+        let span = observability::grpc_request_span("event_command.update_category", &request);
+        tracing::info!(parent: &span, "grpc request received");
         let user_id = parse_uuid(&request.get_ref().user_id, "user_id")?;
         let category_id = parse_uuid(&request.get_ref().category_id, "category_id")?;
         let category = update_category(
@@ -82,6 +86,8 @@ impl EventCommandService for EventCommandGrpcService {
         &self,
         request: Request<DeleteCategoryRequest>,
     ) -> Result<Response<Empty>, Status> {
+        let span = observability::grpc_request_span("event_command.delete_category", &request);
+        tracing::info!(parent: &span, "grpc request received");
         let user_id = parse_uuid(&request.get_ref().user_id, "user_id")?;
         let category_id = parse_uuid(&request.get_ref().category_id, "category_id")?;
         delete_category(&self.state.pool, user_id, category_id)
@@ -95,6 +101,8 @@ impl EventCommandService for EventCommandGrpcService {
         &self,
         request: Request<CreateEventRequest>,
     ) -> Result<Response<EventReply>, Status> {
+        let span = observability::grpc_request_span("event_command.create_event", &request);
+        tracing::info!(parent: &span, "grpc request received");
         let user_id = parse_uuid(&request.get_ref().user_id, "user_id")?;
         let payload = build_event_mutation(request.get_ref())?;
         let event = create_event(&self.state.pool, user_id, payload)
@@ -110,6 +118,8 @@ impl EventCommandService for EventCommandGrpcService {
         &self,
         request: Request<UpdateEventRequest>,
     ) -> Result<Response<EventReply>, Status> {
+        let span = observability::grpc_request_span("event_command.update_event", &request);
+        tracing::info!(parent: &span, "grpc request received");
         let user_id = parse_uuid(&request.get_ref().user_id, "user_id")?;
         let event_id = parse_uuid(&request.get_ref().event_id, "event_id")?;
         let payload = build_event_mutation(request.get_ref())?;
@@ -126,6 +136,8 @@ impl EventCommandService for EventCommandGrpcService {
         &self,
         request: Request<DeleteEventRequest>,
     ) -> Result<Response<Empty>, Status> {
+        let span = observability::grpc_request_span("event_command.delete_event", &request);
+        tracing::info!(parent: &span, "grpc request received");
         let user_id = parse_uuid(&request.get_ref().user_id, "user_id")?;
         let event_id = parse_uuid(&request.get_ref().event_id, "event_id")?;
         delete_event(&self.state.pool, user_id, event_id)
@@ -138,9 +150,10 @@ impl EventCommandService for EventCommandGrpcService {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    observability::init_tracing("event_command_svc=info");
+    observability::init_tracing("event-command-svc", "event_command_svc=info");
 
     let config = Arc::new(Config::from_env()?);
+    observability::spawn_metrics_server("event-command-svc", config.metrics_port);
     let pool = connect_pool(&config.database_url, 10).await?;
     let state = AppState::new(pool, config.clone());
     let address = format!("0.0.0.0:{}", config.grpc_port).parse()?;
@@ -547,5 +560,126 @@ fn status_from_error(error: AppError) -> Status {
             tracing::error!("event-command database error: {}", inner);
             Status::internal("Database operation failed")
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use sqlx::PgPool;
+
+    use super::*;
+
+    fn event_mutation<'a>(category_id: Uuid, title: &'a str, status: &'a str) -> EventMutation<'a> {
+        EventMutation {
+            category_id,
+            title,
+            description: "demo",
+            location: "Room 301",
+            starts_at: DateTime::parse_from_rfc3339("2026-03-15T10:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+            ends_at: DateTime::parse_from_rfc3339("2026-03-15T12:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+            budget: 850.0,
+            status,
+        }
+    }
+
+    async fn insert_user(pool: &PgPool, email: &str) -> Uuid {
+        let user_id = Uuid::new_v4();
+        sqlx::query(
+            r#"
+            INSERT INTO users (id, email, password_hash, full_name)
+            VALUES ($1, $2, 'hash', 'Demo User')
+            "#,
+        )
+        .bind(user_id)
+        .bind(email)
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO ui_settings (user_id, theme)
+            VALUES ($1, 'system')
+            "#,
+        )
+        .bind(user_id)
+        .execute(pool)
+        .await
+        .unwrap();
+        user_id
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn category_lifecycle_enforces_ownership(pool: PgPool) {
+        let owner_id = insert_user(&pool, "owner@eventdesign.local").await;
+        let other_id = insert_user(&pool, "other@eventdesign.local").await;
+
+        let category = create_category(&pool, owner_id, "Conference", "#0f766e")
+            .await
+            .expect("category created");
+        let updated = update_category(&pool, owner_id, category.id, "Defense", "#2563eb")
+            .await
+            .expect("owner can update category");
+        assert_eq!(updated.name, "Defense");
+
+        let ownership_error = update_category(&pool, other_id, category.id, "Stolen", "#111111")
+            .await
+            .expect_err("other users cannot update the category");
+        assert!(matches!(ownership_error, AppError::NotFound(_)));
+
+        delete_category(&pool, owner_id, category.id)
+            .await
+            .expect("owner can delete category");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn event_crud_enforces_ownership(pool: PgPool) {
+        let owner_id = insert_user(&pool, "events-owner@eventdesign.local").await;
+        let other_id = insert_user(&pool, "events-other@eventdesign.local").await;
+        let category = create_category(&pool, owner_id, "Conference", "#0f766e")
+            .await
+            .expect("category created");
+
+        let event = create_event(
+            &pool,
+            owner_id,
+            event_mutation(category.id, "Defense rehearsal", "planned"),
+        )
+        .await
+        .expect("event created");
+        let updated = update_event(
+            &pool,
+            owner_id,
+            event.id,
+            event_mutation(category.id, "Defense rehearsal", "in_progress"),
+        )
+        .await
+        .expect("owner can update event");
+        assert_eq!(updated.status, "in_progress");
+
+        let ownership_error = update_event(
+            &pool,
+            other_id,
+            event.id,
+            event_mutation(category.id, "Defense rehearsal", "completed"),
+        )
+        .await
+        .expect_err("other users cannot mutate the event");
+        assert!(matches!(
+            ownership_error,
+            AppError::BadRequest(_) | AppError::NotFound(_)
+        ));
+
+        delete_event(&pool, owner_id, event.id)
+            .await
+            .expect("owner can delete event");
+        let deleted =
+            repository::find_event_by_id(&mut pool.begin().await.unwrap(), owner_id, event.id)
+                .await
+                .unwrap();
+        assert!(deleted.is_none());
     }
 }

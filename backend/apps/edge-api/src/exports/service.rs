@@ -11,12 +11,14 @@ use contracts::reporting::{
     CreateExportRequest as ReportCreateExportRequest, DownloadExportRequest, GetExportRequest,
     ListExportsRequest,
 };
+use tonic::transport::Channel;
 use uuid::Uuid;
 
 use crate::{
     app_state::AppState,
     error::AppError,
     exports::models::{CreateExportRequest, ExportJob},
+    shared::grpc,
 };
 
 pub async fn list(state: &AppState, user_id: Uuid) -> Result<Vec<ExportJob>, AppError> {
@@ -109,10 +111,18 @@ pub async fn download(
 
 async fn report_client(
     state: &AppState,
-) -> Result<ReportServiceClient<tonic::transport::Channel>, AppError> {
-    ReportServiceClient::connect(state.config.report_service_url.clone())
-        .await
-        .map_err(|error| AppError::Internal(format!("Report service is unavailable: {error}")))
+) -> Result<
+    ReportServiceClient<
+        tonic::service::interceptor::InterceptedService<Channel, grpc::RequestIdInterceptor>,
+    >,
+    AppError,
+> {
+    let channel = grpc::connect_channel(&state.config.report_service_url, "Report service").await?;
+
+    Ok(ReportServiceClient::with_interceptor(
+        channel,
+        grpc::RequestIdInterceptor,
+    ))
 }
 
 fn map_export_job(job: contracts::reporting::ExportJob) -> Result<ExportJob, AppError> {
