@@ -1,236 +1,195 @@
-# Demo Script
+# Demo script для защиты
 
-## Goal
+## Цель
 
-Demonstrate EventDesign as a polished event operations system, not just a CRUD project.
+Этот сценарий нужен для стабильной, короткой и убедительной демонстрации EventDesign.
 
-The demo should show:
+Он должен показывать не все кнопки подряд, а архитектурно и продуктово важные вещи:
 
-- product value
-- architecture maturity
-- security awareness
-- asynchronous processing
-- reporting and exports
-- calendar and dashboard usefulness
-- observability readiness
+- рабочий login flow;
+- управление категориями и событиями;
+- read-side представления;
+- отчёты и экспорт;
+- настройки;
+- зрелую архитектуру и observability.
 
-## Recommended Demo Environment
+## Подготовка перед демонстрацией
 
-Start the stack:
+Перед защитой убедиться, что:
 
-```powershell
-docker compose up --build -d db redis nats minio identity-svc event-command-svc event-query-svc report-svc worker edge-api frontend prometheus grafana
-docker compose --profile demo up demo-seed
-```
+- стек поднят через `docker compose up --build -d`;
+- demo user и demo data созданы;
+- dashboard, calendar и reports заполнены данными;
+- хотя бы один completed export уже существует;
+- smoke script был прогнан успешно;
+- Grafana и Prometheus доступны, если планируется показать observability.
 
-Useful local URLs:
+## Рекомендуемая длительность
 
-- app: `http://localhost:3000`
-- edge api: `http://localhost:8080`
-- prometheus: `http://localhost:9090`
-- grafana: `http://localhost:3001`
+Оптимально: 7–12 минут.
 
-Grafana credentials:
+Не надо превращать демонстрацию в мучительный сериал “а сейчас я покажу ещё 18 экранов”.
+Лучше показать меньше, но последовательно и уверенно.
 
-- username: `admin`
-- password: `admin`
+## Сценарий
 
-Seeded demo credentials:
+### Шаг 1. Коротко про архитектуру
 
-- email: `demo@eventdesign.local`
-- password: `DemoPass123!`
+Показать схему или объяснить словами:
 
-The seed creates:
+- frontend -> Edge API;
+- внутри gRPC-сервисы;
+- write/read split;
+- outbox + JetStream + worker;
+- projections для dashboard/calendar/reports;
+- MinIO для экспортов.
 
-- one demo user
-- five categories
-- fourteen events
-- mixed `planned`, `in_progress`, `completed`, and `cancelled` statuses
-- a month with visible calendar activity
-- completed PDF and XLSX exports
-- one queued export job for the worker pipeline
+Цель:
+сразу зафиксировать, что это не просто CRUD, а системно собранный продукт.
 
-## Demo Flow
+### Шаг 2. Вход в систему
 
-### 1. Show the login page
+Показать:
 
-Explain:
+- login page;
+- успешный вход;
+- загрузку current user.
 
-- browser-facing app is React + TypeScript
-- auth uses secure cookie-based session flow
-- the login page exposes demo credentials for a predictable defense flow
-- Edge API is the only public backend entrypoint
+Можно коротко сказать:
+- auth cookie-based;
+- CSRF/CORS учтены;
+- frontend не хранит токены в `localStorage`.
 
-### 2. Log in
+### Шаг 3. Dashboard
 
-Show:
+Показать:
 
-- successful login
-- authenticated landing page
-- current user-aware UI
+- summary cards;
+- ближайшие события;
+- completed/cancelled counts;
+- общую картину по данным.
 
-Mention:
+Цель:
+показать value продукта и projection-backed read path.
 
-- auth is isolated in `identity-svc`
-- the browser does not manage raw bearer tokens in `localStorage`
-- session validity is backed by a durable PostgreSQL session row
-- state-changing requests are CSRF-protected
+### Шаг 4. Категории
 
-### 3. Dashboard
+Показать:
 
-Show:
+- список категорий;
+- создание новой категории;
+- изменение цвета/названия;
+- сохранение результата.
 
-- total events
-- upcoming events
-- completed events
-- cancelled events
-- total budget
-- recent activity
-- export queue visibility
+### Шаг 5. События
 
-Mention:
+Показать:
 
-- dashboard reads come from optimized read models
-- Redis is used for dashboard cache acceleration
-- the screen stays fast because it reads projections instead of the write model
+- список событий;
+- фильтры;
+- сортировку;
+- создание нового события;
+- изменение существующего события;
+- удаление события.
 
-### 4. Categories
+После изменения хорошо показать, что read-side обновился корректно.
 
-Show:
+### Шаг 6. Calendar
 
-- category list
-- create category
-- rename category
+Показать:
 
-Mention:
+- month view;
+- события по датам;
+- цветовую привязку к категориям;
+- переход к карточке/редактированию события.
 
-- categories are user-owned resources
-- write operations are validated and go through command-side rules
+Это важная дополнительная фича, которая хорошо продаёт проект визуально.
 
-### 5. Events list
+### Шаг 7. Reports
 
-Show:
+Показать:
 
-- event list
-- filtering
-- visible sorting controls
-- event edit flow
+- фильтры по периоду/категории;
+- таблицу или summary;
+- агрегаты;
+- изменение данных при смене фильтров.
 
-Mention:
+Цель:
+показать, что это не просто список событий, а рабочий аналитический слой.
 
-- write and read paths are separated
-- list rendering is backed by query projections
-- sorting is performed through read-side query contracts rather than client-only table tricks
+### Шаг 8. Export
 
-### 6. Create or update an event
+Показать:
 
-Show:
+- создание export job;
+- статус queued/processing/completed;
+- completed export;
+- скачивание PDF или XLSX.
 
-- create or edit a real event
-- status transition
-- category assignment
+Если есть время, можно отметить:
+- export идёт асинхронно;
+- файл хранится в object storage;
+- скачивание защищено.
 
-Mention:
+### Шаг 9. Settings
 
-- mutation is handled by the command side
-- the same transaction writes the outbox event
-- read models update asynchronously through the worker pipeline
+Показать:
 
-### 7. Calendar
+- theme;
+- accent color или default view;
+- сохранение настроек.
 
-Show:
+### Шаг 10. Наблюдаемость
 
-- month view
-- events placed on dates
-- overflow handling on busy days
-- current day highlighting
+Если преподавателю интересно или если хочется усилить впечатление, кратко показать:
 
-Mention:
+- Prometheus / Grafana;
+- request / export / queue / projection metrics;
+- что у системы есть диагностика.
 
-- calendar is projection-driven
-- the seeded month is intentionally populated so the calendar looks alive
+Не надо застревать здесь на 10 минут.
+Показал — и пошёл дальше.
 
-### 8. Reports
+## Что важно проговорить словами
 
-Show:
+Полезные короткие тезисы:
 
-- report filters
-- summary cards
-- grouped category and status aggregates
-- sorted preview rows
-- export history table
+- “Frontend общается только с Edge API.”
+- “Внутри сервисы разделены по ответственности.”
+- “Write-side изменения идут через outbox и асинхронно обновляют read-model.”
+- “Dashboard, calendar и reports читают projections.”
+- “Экспорт вынесен в async pipeline и не держит HTTP-запрос.”
+- “Безопасность браузерного клиента сделана на cookies + CSRF.”
 
-Mention:
+## Что не надо делать на защите
 
-- report preview is served by query-side read models
-- heavy export generation is separate from preview reads
+Не надо:
 
-### 9. Export
+- показывать пустую систему без seed-данных;
+- объяснять 15 минут только инфраструктуру;
+- показывать логи без запроса преподавателя;
+- хаотично бегать между страницами;
+- запускать проект с нуля впервые прямо перед комиссией без smoke-проверки.
 
-Show:
+## Минимальный успешный demo-flow
 
-- create PDF or XLSX export
-- job appears in the queue and history list
-- completed file download
+Если времени мало, обязательно показать:
 
-Mention:
+1. login;
+2. dashboard;
+3. categories;
+4. events;
+5. calendar;
+6. reports;
+7. export.
 
-- export is asynchronous
-- files are stored in object storage
-- the API request does not wait for PDF or XLSX generation
-- queued and processing job states are visible in the UI
+Если это проходит чисто, проект уже выглядит сильно.
 
-### 10. Observability
+## Признак готовности к защите
 
-Show:
+Demo-script считается готовым, когда его можно пройти от начала до конца без:
 
-- Prometheus targets page or a scrape graph
-- Grafana `EventDesign Overview` dashboard
-
-Mention:
-
-- every Rust service exposes `/metrics`
-- request rate, latency, errors, export duration, projection lag, queue lag, cache hit or miss, and security events are visible locally
-- request ids are propagated through the Edge API into internal gRPC calls
-
-### 11. Architecture slide or docs
-
-Show a short architecture diagram.
-
-Mention:
-
-- Edge API / BFF
-- Identity Service
-- Event Command Service
-- Event Query Service
-- Report Service
-- Worker
-- PostgreSQL
-- Redis
-- NATS JetStream
-- MinIO
-- Prometheus and Grafana
-
-## Key Phrases For Defense
-
-Useful phrasing:
-
-- "We separated write and read paths because event mutation and reporting or calendar access have different load patterns."
-- "We use an outbox pattern so domain events are durable and do not get lost between the database write and async publication."
-- "Exports are asynchronous and processed by workers to avoid blocking request latency."
-- "The frontend only knows the Edge API, so internal topology can evolve without breaking the UI."
-- "The read model is projection-based, which keeps dashboard, calendar, and reporting queries fast."
-- "Cookie auth is backed by a durable session row, and state-changing requests require a CSRF token."
-- "We can show latency, errors, cache behavior, projection lag, and export duration from the local observability stack."
-
-## What Not To Waste Time On
-
-Do not spend demo time:
-
-- opening random config files
-- explaining every crate
-- showing raw Redis keys
-- clicking through dead-end pages
-- improvising data entry for five minutes
-
-The point is to show a reliable product and a coherent architecture, not to improvise under pressure.
+- ручного редактирования БД;
+- перезапуска половины сервисов;
+- объяснений “здесь пока не совсем работает”;
+- импровизационного дебага в реальном времени.

@@ -1,33 +1,30 @@
-# External API
+# Внешний API
 
-## Purpose
+## Назначение
 
-This document describes the REST API exposed by Edge API / BFF to the frontend.
+Этот документ описывает REST API, который Edge API / BFF отдаёт фронтенду.
 
-The frontend talks only to this API.
-It does not call internal services directly.
+Фронтенд общается только с этим API.
+Он не должен вызывать внутренние сервисы напрямую.
 
-## Auth And Browser Security
+Документ описывает внешний browser-facing контракт, а не внутренние gRPC контракты.
 
-The implemented browser auth model is cookie-based session auth:
+## Browser security-модель
 
-- the auth cookie is `eventdesign_session`
-- the browser must send `credentials: include`
-- state-changing requests use a double-submit CSRF token
-- allowed frontend origins come from `FRONTEND_ORIGINS`
-- most responses expose `x-request-id` for correlation
+Предполагается следующая модель безопасности:
 
-Browser flow:
+- браузерная авторизация cookie-based;
+- auth cookie называется `eventdesign_session`;
+- браузер должен отправлять `credentials: include`;
+- state-changing запросы должны отправлять CSRF token в `X-CSRF-Token`;
+- допустимые frontend origins задаются явным allowlist, например `FRONTEND_ORIGINS`;
+- ответы по возможности содержат `x-request-id` или аналогичный correlation id.
 
-1. `GET /api/auth/csrf`
-2. send `POST`, `PATCH`, or `DELETE` with the returned token in `X-CSRF-Token`
-3. after login or register, continue using the HttpOnly session cookie
+В нормальном browser flow нельзя использовать `localStorage` bearer tokens.
 
-Normal browser auth does not use `localStorage` bearer tokens.
+## Общий формат ответов и ошибок
 
-## Common Response And Error Format
-
-Successful JSON responses use:
+Успешные JSON-ответы должны иметь вид:
 
 ```json
 {
@@ -35,486 +32,323 @@ Successful JSON responses use:
 }
 ```
 
-Error responses use:
+Ошибки должны иметь единый envelope, например:
 
 ```json
 {
   "error": {
-    "message": "Human readable message"
+    "code": "validation_error",
+    "message": "Человекочитаемое описание ошибки",
+    "request_id": "req_123"
   }
 }
 ```
 
-Common status codes:
+Если текущий код пока возвращает менее богатый формат, он должен быть постепенно приведён к единому виду.
 
-- `400` bad input
-- `401` unauthenticated or CSRF failure
-- `404` resource not found
-- `409` conflict
+## Основные коды ответа
+
+- `200` успешное чтение
+- `201` успешное создание
+- `204` успешное удаление без тела
+- `400` ошибка валидации или плохой запрос
+- `401` неаутентифицированный пользователь или ошибка CSRF
+- `403` недостаточно прав / ownership failure
+- `404` ресурс не найден
+- `409` конфликт
 - `429` rate limited
-- `500` internal error
+- `500` внутренняя ошибка сервера
 
-Field names are snake_case throughout the public API.
-
-## Route Groups
+## Группы маршрутов
 
 ### Auth
 
-#### GET /api/auth/csrf
+#### GET `/api/auth/csrf`
 
-Returns a CSRF token and sets the `eventdesign_csrf` cookie.
-This route is unauthenticated and safe to call before login.
+Назначение:
 
-Response:
+- выдать CSRF token;
+- выставить CSRF cookie, если это нужно текущей реализации.
 
-```json
-{
-  "data": {
-    "csrf_token": "4d1458f4deda4cf6bbd91f7743e0d4b0"
-  }
-}
-```
+Сценарий:
+1. браузер вызывает endpoint перед login/register или перед первым state-changing запросом;
+2. token затем отправляется в `X-CSRF-Token`.
 
-#### POST /api/auth/register
+#### POST `/api/auth/register`
 
-Creates a user account and sets the `eventdesign_session` HttpOnly cookie.
-Requires a valid CSRF token.
+Назначение:
 
-Request:
+- создать пользователя;
+- создать активную сессию;
+- выставить `eventdesign_session` cookie.
 
-```json
-{
-  "email": "user@example.com",
-  "password": "secret123",
-  "full_name": "Alex"
-}
-```
+Требования:
+- валидный CSRF token;
+- email uniqueness;
+- password hashing;
+- возврат текущего пользователя в `data`.
 
-Response:
+#### POST `/api/auth/login`
 
-```json
-{
-  "data": {
-    "user": {
-      "id": "uuid",
-      "email": "user@example.com",
-      "full_name": "Alex",
-      "created_at": "2026-03-13T10:00:00Z"
-    }
-  }
-}
-```
+Назначение:
 
-#### POST /api/auth/login
+- проверить credentials;
+- создать durable session;
+- выставить `eventdesign_session` cookie.
 
-Creates a durable session row, sets the `eventdesign_session` HttpOnly cookie, and returns the current user.
-Requires a valid CSRF token.
+Требования:
+- валидный CSRF token;
+- ownership или role checks здесь не нужны, но нужна строгая проверка credentials;
+- в ответе должен быть current user.
 
-Request:
+#### POST `/api/auth/logout`
 
-```json
-{
-  "email": "user@example.com",
-  "password": "secret123"
-}
-```
+Назначение:
 
-Response:
+- отозвать текущую сессию;
+- очистить auth cookie.
 
-```json
-{
-  "data": {
-    "user": {
-      "id": "uuid",
-      "email": "user@example.com",
-      "full_name": "Alex",
-      "created_at": "2026-03-13T10:00:00Z"
-    }
-  }
-}
-```
+Требования:
+- валидный CSRF token;
+- logout должен инвалидировать session row, а не только удалить cookie на клиенте.
 
-#### POST /api/auth/logout
+#### GET `/api/auth/me`
 
-Revokes the current durable session and clears the auth cookie.
-Requires a valid CSRF token.
+Назначение:
 
-Response:
+- вернуть current authenticated user;
+- служить bootstrap endpoint для фронтенда.
 
-```json
-{
-  "data": "logged_out"
-}
-```
-
-#### GET /api/auth/me
-
-Returns the current authenticated user if the cookie is present and the backing session row is still active.
-
-Response:
-
-```json
-{
-  "data": {
-    "user": {
-      "id": "uuid",
-      "email": "user@example.com",
-      "full_name": "Alex",
-      "created_at": "2026-03-13T10:00:00Z"
-    }
-  }
-}
-```
+Требования:
+- корректная обработка просроченной или revoked session;
+- отсутствие лишних внутренних полей в DTO.
 
 ### Categories
 
-#### GET /api/categories
+#### GET `/api/categories`
 
-Returns all categories for the authenticated user.
+Возвращает все категории текущего пользователя.
 
-Response:
+Требования:
+- обязательная аутентификация;
+- нельзя отдавать категории других пользователей.
 
-```json
-{
-  "data": [
-    {
-      "id": "uuid",
-      "user_id": "uuid",
-      "name": "Conference",
-      "color": "#0f766e",
-      "created_at": "2026-03-13T10:00:00Z",
-      "updated_at": "2026-03-13T10:00:00Z"
-    }
-  ]
-}
-```
+#### POST `/api/categories`
 
-#### POST /api/categories
+Создаёт категорию текущего пользователя.
 
-Creates a category.
-Requires a valid CSRF token.
+Требования:
+- CSRF;
+- user ownership определяется сервером, а не приходит из клиента;
+- цвет и имя валидируются.
 
-Request:
+#### PATCH `/api/categories/:id`
 
-```json
-{
-  "name": "Conference",
-  "color": "#0f766e"
-}
-```
+Обновляет категорию.
 
-#### PATCH /api/categories/:id
+Требования:
+- CSRF;
+- ownership check;
+- нельзя позволять менять category другого пользователя.
 
-Updates a category.
-Requires a valid CSRF token.
+#### DELETE `/api/categories/:id`
 
-Request:
+Удаляет категорию.
 
-```json
-{
-  "name": "Meetup",
-  "color": "#2563eb"
-}
-```
-
-#### DELETE /api/categories/:id
-
-Deletes a category owned by the current user.
-Requires a valid CSRF token.
-
-Response:
-
-```json
-{
-  "data": "deleted"
-}
-```
+Требования:
+- CSRF;
+- ownership check;
+- поведение для категории, используемой событиями, должно быть явно определено.
 
 ### Events
 
-#### GET /api/events
+#### GET `/api/events`
 
-Returns filtered and sorted event projection rows for the authenticated user.
+Возвращает список событий текущего пользователя.
 
-Query params may include:
+Поддерживаемые query-параметры:
 
-- `search`
 - `status`
 - `category_id`
-- `start_date`
-- `end_date`
+- `search`
+- `from`
+- `to`
 - `sort_by`
-- `sort_dir`
+- `sort_order`
 
-Supported `sort_by` values:
+Требования:
+- данные должны приходить из query-side / projections в целевой архитектуре;
+- нельзя возвращать чужие события;
+- сортировка и фильтрация должны быть предсказуемыми.
 
-- `starts_at`
-- `ends_at`
-- `budget`
-- `title`
-- `status`
-- `updated_at`
-- `category_name`
+#### GET `/api/events/:id`
 
-Response:
+Возвращает одно событие текущего пользователя.
 
-```json
-{
-  "data": [
-    {
-      "id": "uuid",
-      "user_id": "uuid",
-      "category_id": "uuid",
-      "category_name": "Conference",
-      "category_color": "#0f766e",
-      "title": "Defense rehearsal",
-      "description": "Dry run",
-      "location": "Room 301",
-      "starts_at": "2026-03-15T10:00:00Z",
-      "ends_at": "2026-03-15T12:00:00Z",
-      "budget": 850.0,
-      "status": "planned",
-      "created_at": "2026-03-13T10:00:00Z",
-      "updated_at": "2026-03-13T10:00:00Z"
-    }
-  ]
-}
-```
+Требования:
+- ownership check;
+- консистентный DTO.
 
-#### GET /api/events/:id
+#### POST `/api/events`
 
-Returns one event from the write-side ownership boundary.
+Создаёт событие.
 
-#### POST /api/events
+Требования:
+- CSRF;
+- category должна принадлежать тому же пользователю;
+- `starts_at < ends_at`;
+- write-side mutation должна создавать outbox event.
 
-Creates an event.
-Requires a valid CSRF token.
+#### PATCH `/api/events/:id`
 
-Request:
+Обновляет событие.
 
-```json
-{
-  "category_id": "uuid",
-  "title": "Frontend Meetup",
-  "description": "Community event",
-  "location": "Amsterdam",
-  "starts_at": "2026-04-10T18:00:00Z",
-  "ends_at": "2026-04-10T21:00:00Z",
-  "budget": 1200,
-  "status": "planned"
-}
-```
+Требования:
+- CSRF;
+- ownership check;
+- status transitions должны быть валидны;
+- mutation должна отражаться в projections через async backbone.
 
-#### PATCH /api/events/:id
+#### DELETE `/api/events/:id`
 
-Updates an event.
-Requires a valid CSRF token.
+Удаляет событие.
 
-#### DELETE /api/events/:id
-
-Deletes an event.
-Requires a valid CSRF token.
+Требования:
+- CSRF;
+- ownership check;
+- удаление должно eventually отражаться на read-side.
 
 ### Dashboard
 
-#### GET /api/dashboard
+#### GET `/api/dashboard`
 
-Returns projection-backed dashboard cards plus upcoming events and recent activity.
+Возвращает summary cards и быстрые агрегаты текущего пользователя.
 
-Response:
-
-```json
-{
-  "data": {
-    "cards": {
-      "total_events": 12,
-      "upcoming_events": 4,
-      "completed_events": 6,
-      "cancelled_events": 2,
-      "total_budget": 8450
-    },
-    "upcoming": [],
-    "recent_activity": []
-  }
-}
-```
+Требования:
+- projection-backed reads;
+- отсутствие stale data за пределами допустимого eventual consistency window;
+- при наличии Redis-кэша должен существовать механизм invalidation или TTL.
 
 ### Calendar
 
-#### GET /api/calendar
+#### GET `/api/calendar`
 
-Returns calendar projection rows for a date window.
+Возвращает данные календаря текущего пользователя.
 
-Query params:
+Ожидаемые query-параметры:
 
-- `start_date`
-- `end_date`
+- `year`
+- `month`
 
-Response:
-
-```json
-{
-  "data": [
-    {
-      "event_id": "uuid",
-      "title": "Frontend Meetup",
-      "date": "2026-04-10",
-      "starts_at": "2026-04-10T18:00:00Z",
-      "ends_at": "2026-04-10T21:00:00Z",
-      "status": "planned",
-      "category_color": "#2563eb"
-    }
-  ]
-}
-```
+Требования:
+- projection-backed reads;
+- ownership isolation;
+- консистентное представление статусов и category color.
 
 ### Reports
 
-#### GET /api/reports/summary
+#### GET `/api/reports/summary`
 
-Returns the report preview, summary cards, grouped aggregates, and sorted preview rows.
+Возвращает preview summary для отчёта.
 
-Query params may include:
+Ожидаемые фильтры:
 
-- `status`
-- `category_id`
-- `start_date`
-- `end_date`
-- `sort_by`
-- `sort_dir`
+- период;
+- категория;
+- статус;
+- сортировка.
 
-The current UI uses preview sorting for:
+#### GET `/api/reports/by-category`
 
-- `starts_at`
-- `title`
-- `category_name`
-- `budget`
-- `status`
-- `updated_at`
+Возвращает breakdown по категориям.
 
-Response:
-
-```json
-{
-  "data": {
-    "filters": {
-      "status": "planned",
-      "category_id": null,
-      "start_date": "2026-03-01",
-      "end_date": "2026-03-31",
-      "sort_by": "starts_at",
-      "sort_dir": "asc"
-    },
-    "period_start": "2026-03-01",
-    "period_end": "2026-03-31",
-    "total_events": 12,
-    "total_budget": 8450,
-    "by_category": [],
-    "by_status": [],
-    "events": []
-  }
-}
-```
-
-#### GET /api/reports/by-category
-
-Returns only the grouped category rows for the same filter set.
+Требования:
+- query-side read;
+- user scope isolation;
+- корректный набор агрегатов.
 
 ### Exports
 
-#### POST /api/exports
+#### POST `/api/exports`
 
-Creates an asynchronous export job.
-Requires a valid CSRF token.
+Создаёт export job.
 
-Request:
+Требования:
+- CSRF;
+- ownership определяется сервером;
+- payload должен описывать report type, format и фильтры;
+- ответ должен вернуть хотя бы `job_id` и начальный статус.
 
-```json
-{
-  "report_type": "summary",
-  "format": "pdf",
-  "filters": {
-    "start_date": "2026-04-01",
-    "end_date": "2026-04-30",
-    "category_id": null,
-    "status": null,
-    "sort_by": "starts_at",
-    "sort_dir": "asc"
-  }
-}
-```
+#### GET `/api/exports`
 
-Response:
+Возвращает список export jobs текущего пользователя.
 
-```json
-{
-  "data": {
-    "id": "uuid",
-    "user_id": "uuid",
-    "report_type": "summary",
-    "format": "pdf",
-    "status": "queued",
-    "filters": {},
-    "object_key": null,
-    "content_type": null,
-    "error_message": null,
-    "created_at": "2026-04-10T21:00:00Z",
-    "started_at": null,
-    "updated_at": "2026-04-10T21:00:00Z",
-    "finished_at": null
-  }
-}
-```
+Требования:
+- ownership isolation;
+- сортировка по времени / статусу по возможности;
+- completed jobs должны содержать достаточно информации для дальнейшего download flow.
 
-#### GET /api/exports
+#### GET `/api/exports/:id`
 
-Returns all export jobs for the current user.
+Возвращает состояние одного export job.
 
-#### GET /api/exports/:id
+Требования:
+- ownership check;
+- completed job должен содержать информацию, достаточную для скачивания.
 
-Returns one export job owned by the current user.
+#### POST `/api/exports/:id/download` или GET `/api/exports/:id/download`
 
-#### GET /api/exports/:id/download
+Назначение:
 
-Streams the export file if the job is completed and belongs to the current user.
+- инициировать безопасную выдачу presigned URL или прямой проксируемый download.
+
+Требования:
+- ownership check;
+- completed status;
+- object должен реально существовать в MinIO;
+- нельзя отдавать чужие артефакты.
 
 ### Settings
 
-#### GET /api/settings
+#### GET `/api/settings`
 
-Returns the current user's UI settings.
+Возвращает UI settings текущего пользователя.
 
-Response:
+#### PATCH `/api/settings`
 
-```json
-{
-  "data": {
-    "user_id": "uuid",
-    "theme": "system",
-    "accent_color": "#b6532f",
-    "default_view": "dashboard",
-    "created_at": "2026-03-13T10:00:00Z",
-    "updated_at": "2026-03-13T10:00:00Z"
-  }
-}
-```
+Обновляет UI settings текущего пользователя.
 
-#### PATCH /api/settings
+Требования:
+- CSRF;
+- ownership определяется сервером;
+- настройки не должны требовать прямого SQL в Edge API в финальной архитектуре.
 
-Updates the current user's UI settings.
-Requires a valid CSRF token.
+## Общие требования к API
 
-Request:
+Во всех user-scoped endpoints должны быть:
 
-```json
-{
-  "theme": "dark",
-  "accent_color": "#0f766e",
-  "default_view": "reports"
-}
-```
+- authentication;
+- ownership check;
+- предсказуемый JSON response shape;
+- request correlation id;
+- внятные ошибки для фронтенда.
 
-## Internal Service Note
+## Что не должно быть частью внешнего API
 
-These routes are the external contract only.
-Internal gRPC contracts follow service boundaries rather than mirroring the REST surface 1:1.
+Фронтенд не должен видеть:
+
+- внутренние gRPC DTO;
+- внутренние service ids;
+- outbox metadata;
+- служебные технические поля, не нужные UI;
+- прямой доступ к `/metrics` и служебным internal endpoints.
+
+## Критерий завершённости внешнего API
+
+Внешний API считается доведённым, когда:
+
+- фронтенд закрывает все ключевые сценарии только через Edge API;
+- browser auth стабильно работает с cookies и CSRF;
+- ошибки унифицированы;
+- ownership leaks отсутствуют;
+- export/download flow проходит end-to-end.

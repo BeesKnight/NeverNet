@@ -1,65 +1,56 @@
-# Domain Model
+# Доменная модель EventDesign
 
-## Product Summary
+## Краткое описание продукта
 
-EventDesign is an event planning and operations system.
+EventDesign — система для планирования мероприятий и управления событиями.
 
-Users manage their own categories and events.
-They can track statuses, filter and sort events, view calendar data, generate reports, and export reports to PDF or XLSX.
+Пользователь управляет своими категориями и событиями, может фильтровать и сортировать списки, смотреть календарь, видеть dashboard summary, строить отчёты и экспортировать их в PDF/XLSX.
 
-## Bounded Contexts
+## Bounded contexts
 
 ### Identity
 
-Handles:
+Отвечает за:
 
-- users
-- sessions
-- authentication
-- authorization context
+- users;
+- sessions;
+- authentication;
+- authorization context.
 
 ### Event Management
 
-Handles:
+Отвечает за:
 
-- categories
-- events
-- event statuses
-- ownership
-- event lifecycle
+- categories;
+- events;
+- event lifecycle;
+- ownership;
+- write-side business validation.
 
-### Reporting
+### Reporting And Exports
 
-Handles:
+Отвечает за:
 
-- report previews
-- grouped aggregates
-- export jobs
-- export history
-- generated artifacts
+- report previews;
+- aggregates;
+- export jobs;
+- generated artifacts;
+- download authorization.
 
 ### Preferences
 
-Handles:
+Отвечает за:
 
-- UI theme
-- accent color
-- default page or default view
-- other persistent user UI preferences
+- UI theme;
+- accent color;
+- default view / default page;
+- другие user-scoped interface settings.
 
-### Activity
-
-Handles:
-
-- recent actions
-- user-visible timeline entries
-- event mutation history projections
-
-## Core Entities
+## Основные сущности
 
 ### User
 
-Fields:
+Поля:
 
 - id
 - email
@@ -68,15 +59,15 @@ Fields:
 - created_at
 - updated_at
 
-Rules:
+Правила:
 
-- email must be unique
-- password must never be stored in plain text
-- a user owns categories, events, settings, sessions, and export jobs
+- email должен быть уникальным;
+- пароль никогда не хранится в открытом виде;
+- пользователь владеет категориями, событиями, сессиями, UI settings и export jobs.
 
 ### Session
 
-Fields:
+Поля:
 
 - id
 - user_id
@@ -86,18 +77,16 @@ Fields:
 - user_agent
 - ip_address
 
-Rules:
+Правила:
 
-- sessions belong to users
-- sessions are persisted in PostgreSQL
-- the browser cookie carries a JWT with the user id plus the session id claim
-- the session row remains the source of truth for logout and revocation
-- revoked or expired sessions are invalid
-- normal browser auth does not rely on `localStorage` bearer tokens
+- сессия принадлежит одному пользователю;
+- сессия бывает активной или отозванной;
+- browser auth cookie представляет session-bound identity;
+- logout и принудительная инвалидизация должны отзывать session row.
 
 ### Category
 
-Fields:
+Поля:
 
 - id
 - user_id
@@ -106,15 +95,16 @@ Fields:
 - created_at
 - updated_at
 
-Rules:
+Правила:
 
-- category names are unique per user
-- categories are user-scoped
-- deleting a category that is still referenced by events is blocked by the write model
+- категории user-scoped;
+- ограничения имени могут быть глобальными по пользователю, если продукт это предполагает;
+- ownership должен проверяться всегда;
+- удаление категории, которая ещё используется событиями, должно быть явно запрещено или корректно обработано.
 
 ### Event
 
-Fields:
+Поля:
 
 - id
 - user_id
@@ -129,17 +119,18 @@ Fields:
 - created_at
 - updated_at
 
-Rules:
+Правила:
 
-- an event belongs to exactly one user
-- an event belongs to exactly one category
-- start time must be before end time
-- status must be valid
-- ownership must always be enforced
+- событие принадлежит одному пользователю;
+- событие принадлежит одной категории того же пользователя;
+- `starts_at` должен быть раньше `ends_at`;
+- status должен быть одним из допустимых значений;
+- ownership должен проверяться всегда;
+- write-side изменения обязаны генерировать domain events.
 
 ### UI Settings
 
-Fields:
+Поля:
 
 - user_id
 - theme
@@ -148,75 +139,82 @@ Fields:
 - created_at
 - updated_at
 
-Rules:
+Правила:
 
-- exactly one settings record exists per user
-- settings are user-scoped like the rest of the product
+- на пользователя должна существовать одна запись настроек;
+- настройки user-scoped;
+- если строки нет, должны безопасно применяться значения по умолчанию.
 
 ### Export Job
 
-Fields:
+Поля:
 
 - id
 - user_id
 - report_type
 - format
 - status
-- filters
+- filters_json
 - object_key
 - content_type
+- size_bytes
 - error_message
 - created_at
 - started_at
 - updated_at
 - finished_at
 
-Rules:
+Правила:
 
-- export jobs belong to a user
-- export jobs survive API process restarts
-- generated file metadata does not rely on local container filesystem paths
-- supported job states are `queued`, `processing`, `completed`, and `failed`
+- export job принадлежит одному пользователю;
+- файловая метаинформация не должна зависеть от локального пути внутри контейнера;
+- как минимум должны поддерживаться статусы `queued`, `processing`, `completed`, `failed`;
+- completed-job обязан указывать на реальный объект в MinIO/S3-compatible storage;
+- скачивание должно проверять ownership.
 
-## Event Statuses
+## Допустимые статусы события
 
-Supported statuses:
+Минимальный набор:
 
 - planned
 - in_progress
 - completed
 - cancelled
 
-Recommended transition policy:
+Рекомендуемая политика переходов:
 
 - planned -> in_progress
 - planned -> cancelled
 - in_progress -> completed
 - in_progress -> cancelled
 
-## Main User Capabilities
+Если код позволяет больше переходов, это должно быть явно задокументировано и сделано осознанно.
 
-A user must be able to:
+## Основные пользовательские возможности
 
-- register and log in
-- manage categories
-- create and update events
-- filter and sort events
-- view a calendar of events
-- see dashboard summaries
-- view reports by period and category
-- export reports to PDF or XLSX
-- configure interface settings
+Пользователь должен уметь:
 
-## Read Model Projections
+- регистрироваться и входить;
+- выходить, теряя активную сессию;
+- управлять категориями;
+- создавать и редактировать события;
+- фильтровать и сортировать списки событий;
+- смотреть календарь;
+- видеть dashboard summaries;
+- строить отчёты по периоду и категориям;
+- экспортировать отчёты в PDF и XLSX;
+- менять настройки интерфейса.
+
+## Projection-backed read models
 
 ### event_list_projection
 
-Purpose:
+Назначение:
 
-- power filtered and sorted event list UI
+- страница списка событий;
+- UI для сортировки и фильтрации.
 
-Fields:
+Ожидаемые поля:
 
 - event_id
 - user_id
@@ -235,11 +233,11 @@ Fields:
 
 ### calendar_projection
 
-Purpose:
+Назначение:
 
-- power month calendar rendering
+- отображение календаря по датам / месяцам.
 
-Fields:
+Ожидаемые поля:
 
 - event_id
 - user_id
@@ -253,11 +251,11 @@ Fields:
 
 ### dashboard_projection
 
-Purpose:
+Назначение:
 
-- power dashboard cards and upcoming event summaries
+- summary cards и dashboard widgets.
 
-Fields:
+Ожидаемые поля:
 
 - user_id
 - total_events
@@ -269,11 +267,11 @@ Fields:
 
 ### report_projection
 
-Purpose:
+Назначение:
 
-- power report preview screens, sorting, grouped summaries, and exports
+- предпросмотр отчётов и база для export-запросов.
 
-Fields:
+Ожидаемые поля:
 
 - event_id
 - user_id
@@ -292,11 +290,12 @@ Fields:
 
 ### recent_activity_projection
 
-Purpose:
+Назначение:
 
-- power the recent activity widget on the dashboard
+- recent activity feed;
+- audit-flavored UX, если реализовано.
 
-Fields:
+Ожидаемые поля:
 
 - id
 - source_message_id
@@ -308,35 +307,25 @@ Fields:
 - occurred_at
 - created_at
 
-## Domain Events
+## Инварианты, которые должны соблюдаться
 
-Current async event families include:
+Во всей системе должно оставаться истинным следующее:
 
-- category.created
-- category.updated
-- category.deleted
-- event.created
-- event.updated
-- event.deleted
-- event.status_changed
-- export.requested
-- export.started
-- export.completed
-- export.failed
+- пользователь A не может читать или изменять категории пользователя B;
+- пользователь A не может читать или изменять события пользователя B;
+- пользователь A не может скачивать или смотреть export jobs пользователя B;
+- событие не может ссылаться на категорию другого пользователя;
+- projection rows должны eventually отражать authoritative write-side state;
+- повторная доставка одного и того же события не должна портить projections;
+- completed export job должен соответствовать реально скачиваемому артефакту.
 
-Auth lifecycle remains synchronous through `identity-svc`; login and logout are enforced through durable sessions rather than the async backbone.
+## Зоны риска доменной модели
 
-## Ownership Model
+Доменная модель быстро деградирует, если:
 
-Every user-scoped resource is checked against the authenticated user id.
+- Edge API обходит внутренние сервисы и ходит в DB напрямую;
+- projection updates неидемпотентны;
+- export jobs двигаются по статусам без durable state transitions;
+- DTO наружу отдают внутренние поля, которые не нужны фронтенду.
 
-This applies to:
-
-- categories
-- events
-- settings
-- sessions
-- export jobs
-- generated exports
-
-Never rely on client-side filtering for access control.
+Это не абстрактные страшилки. Эти места надо проверять кодом и чинить там, где они есть.

@@ -1,56 +1,100 @@
 # AGENTS.md
 
-## Project identity
+## Идентичность проекта
 
-This repository contains **EventDesign**, a high-ambition graduation project for event planning and event operations.
+Этот репозиторий содержит **EventDesign** — амбициозный дипломный full-stack проект для планирования мероприятий и управления событиями.
 
-The current repository already includes a working baseline implementation.
-Do not discard it.
-Rewrite it incrementally toward the target architecture described in `docs/`.
+В репозитории уже есть большая рабочая база.
+Не выбрасывай существующую функциональность.
+Не делай big-bang rewrite.
+Все изменения должны быть поэтапными, проверяемыми и обратимыми.
 
-## How to read instructions
+## Язык документации
 
-Before starting any substantial task, read these files in this order:
+**Все документы, README-файлы, runbook-материалы и поясняющие тексты в репозитории должны быть на русском языке.**
+
+Правила:
+- переводить на русский все `README.md`, `docs/*.md` и пользовательские описания в репозитории;
+- технические идентификаторы, имена файлов, названия переменных окружения, API-маршруты, SQL/код и команды CLI оставлять как есть;
+- не переводить имена сервисов, subject names, enum values, cookie names и прочие технические константы, если это ломает код или делает документацию менее точной;
+- при обновлении документации сохранять единый стиль: сухо, технически, ясно, без рекламной подачи.
+
+## Порядок чтения инструкций
+
+Перед началом любой существенной задачи прочитай файлы в таком порядке:
 
 1. `docs/architecture.md`
 2. `docs/domain-model.md`
 3. `docs/messaging.md`
 4. `docs/api.md`
 5. `docs/delivery-plan.md`
-6. `docs/demo-script.md`
-7. `docs/erd.md`
+6. `docs/risk-register.md`
+7. `docs/runbook.md`
+8. `docs/demo-script.md`
+9. `docs/review-checklist.md`
+10. `docs/erd.md`
 
-If a task changes architecture, contracts, data flow, infra, deployment, auth, queueing, or demo behavior, update the affected docs in the same change.
+Если задача меняет архитектуру, контракты, запуск, безопасность, очереди, демо-поведение, переменные окружения или инфраструктуру, обновляй затронутые документы в том же изменении.
 
-## Primary migration rule
+## Главная цель
 
-This repository must be migrated in **phases**.
-Do not attempt a big-bang rewrite.
-Preserve end-to-end functionality while moving to the target architecture.
+Довести EventDesign до состояния **production-like demo-ready**:
 
-Phase execution order:
-1. foundation and workspace split
-2. command/query separation and async spine
-3. hardening, observability, polish, and defense preparation
+- `docker compose up --build -d` стабильно поднимает весь стек;
+- миграции применяются один раз и до старта сервисов;
+- фронтенд общается только с Edge API / BFF;
+- внутренние сервисы общаются через явные gRPC-границы;
+- write-side изменения создают durable domain events через outbox;
+- read-heavy экраны читают projection-таблицы;
+- экспорт работает асинхронно и хранится в object storage;
+- браузерная авторизация работает через безопасные cookies + CSRF;
+- у проекта есть smoke script, понятный runbook и внятная история для защиты;
+- документация и README-файлы переведены на русский язык.
 
-Only work on the active phase unless explicitly asked to continue.
+## Фазовая модель работы
 
-## Repository goals
+План изменений разделён на **5 последовательных фаз**.
+Работай только над активной фазой, если явно не сказано продолжать дальше.
 
-The end state should look like a compact high-load style product while still being runnable locally.
+1. детерминированный запуск, миграции и bootstrap инфраструктуры
+2. event backbone, outbox, JetStream, projections, идемпотентность
+3. auth/security/export correctness
+4. зачистка сервисных границ, observability, cache behavior, документация
+5. тесты, smoke, CI hygiene, финальная полировка под защиту
 
-Target qualities:
-- a single external API entrypoint
-- explicit service boundaries
-- command/write and query/read separation
-- asynchronous background processing
-- durable event publication through outbox
-- projection-driven fast reads
-- secure browser auth
-- production-like observability
-- clear local startup path through Docker Compose
+Каждая фаза должна оставлять репозиторий в запускаемом состоянии.
 
-## Target stack
+## Непереговорные правила
+
+- Не удаляй пользовательскую функциональность, если не заменяешь её в той же фазе.
+- Не добавляй новые микросервисы сверх текущей целевой топологии.
+- Не позволяй фронтенду обращаться к внутренним сервисам напрямую.
+- Не используй `localStorage` для браузерных auth token в финальной архитектуре.
+- Не оставляй прямой доступ Edge API к domain SQL там, где уже есть внутренние сервисы.
+- Не оставляй документацию устаревшей после изменения поведения или архитектуры.
+- Не объявляй фичу завершённой, если не проверен end-to-end сценарий.
+- Не добавляй Kafka, если NATS JetStream уже закрывает задачу.
+- Не добавляй wasm-сложность.
+- Не хардкодь секреты.
+- Не оставляй README и `docs/*` на английском: целевой язык репозитория — русский.
+
+## Пользовательский scope, который должен сохраняться
+
+Во всех фазах должны продолжать работать:
+
+- регистрация
+- login / logout
+- bootstrap current user
+- категории
+- CRUD мероприятий
+- фильтрация и сортировка
+- dashboard
+- calendar view
+- отчёты по периоду и категориям
+- экспорт PDF/XLSX
+- настройки интерфейса
+
+## Целевой стек
 
 ### Frontend
 - React
@@ -61,24 +105,24 @@ Target qualities:
 
 ### Backend
 - Rust workspace
-- Axum for Edge API / BFF
-- tonic gRPC for internal services
+- Axum для Edge API / BFF
+- tonic gRPC для внутренних сервисов
 - SQLx
 - PostgreSQL
 - Redis
 - NATS JetStream
-- MinIO or S3-compatible storage
+- MinIO или совместимое S3-хранилище
 
 ### Observability
 - tracing
-- OpenTelemetry
 - Prometheus
 - Grafana
-- Loki
+- OpenTelemetry-ready request propagation
+- Loki опционален, не обязателен для готовности
 
-## Target architecture
+## Архитектурные правила
 
-The target architecture is:
+Целевая архитектура:
 
 - `frontend/`
 - `backend/apps/edge-api`
@@ -89,102 +133,106 @@ The target architecture is:
 - `backend/apps/worker`
 - `backend/crates/*`
 
-Communication model:
-- REST/JSON from frontend to edge-api
-- gRPC between edge-api and internal services
-- outbox pattern for durable domain events
-- NATS JetStream for async event delivery
-- PostgreSQL write model + projection/read model
-- Redis for cache, rate limiting, locks, session acceleration
-- MinIO/S3-compatible storage for exports
+Модель взаимодействия:
 
-## Non-negotiable rules
+- REST/JSON от фронтенда к Edge API
+- gRPC между Edge API и внутренними сервисами
+- PostgreSQL как write model и storage для projection/read model
+- outbox pattern для durable domain events
+- NATS JetStream для async event delivery
+- Redis для кэша, rate limiting, короткоживущей координации и locks
+- MinIO/S3-compatible storage для экспортов
 
-- Do not delete working user-facing features unless they are replaced in the same phase.
-- Do not introduce unnecessary services.
-- Do not add Kafka when NATS JetStream is sufficient.
-- Do not add wasm-based complexity.
-- Do not let the frontend call internal services directly.
-- Do not keep browser auth tokens in localStorage in the final architecture.
-- Do not leave docs stale after architecture changes.
-- Do not keep fake TODO implementations presented as complete.
+## Правила безопасности
 
-## Product scope that must remain supported
+Целевая browser security-модель:
 
-The following features must remain available throughout migration:
+- HttpOnly session cookie
+- Secure cookie в production-like окружениях
+- явная SameSite policy
+- CSRF-защита для state-changing запросов
+- CORS allowlist для frontend origins
+- ownership checks на всех user-scoped ресурсах
+- отсутствие object-level authorization leaks
+- отсутствие лишней выдачи внутренних полей наружу
 
-- registration
-- login/logout
-- categories
-- event CRUD
-- filtering
-- sorting
-- reports by period and category
-- PDF/XLSX export
-- UI settings
-- calendar view
+## Правила данных и сообщений
 
-## Security rules
+Все бизнес-записи должны идти через command-side границы.
+Все значимые write-side изменения должны создавать outbox events в той же транзакции.
+Read-side экраны должны использовать projection-таблицы там, где этого требует архитектура.
+Workers обязаны быть устойчивыми к at-least-once delivery и работать идемпотентно там, где это нужно.
 
-Target auth model:
-- HttpOnly cookie-based auth
-- secure password hashing
-- CSRF protection for state-changing browser requests
-- ownership checks on all user resources
-- CORS restricted to configured frontend origins
-- no hardcoded secrets
+Ключевые семейства событий:
 
-Temporary compatibility may be used only during migration and must be removed before phase completion.
-
-## Data and messaging rules
-
-All business writes must go through command-side ownership boundaries.
-All major write-side changes must become domain events through the outbox pipeline.
-Read-side screens should rely on projection tables where the target architecture requires it.
-
-Important event families:
 - user
 - category
 - event
 - export
-- activity/audit
+- activity / audit
 
-## Code quality rules
+## Правила качества и верификации
 
-Before considering work complete:
-- run formatting
-- run linting
-- run type checks
-- run tests relevant to the change
-- verify local startup still works where applicable
-- update docs if behavior or architecture changed
+Перед тем как считать задачу завершённой:
 
-## Review priorities
+- запусти форматирование
+- запусти линтеры
+- запусти typecheck
+- запусти релевантные тесты
+- проверь, что локальный запуск не сломан
+- обнови документацию, если изменилось поведение или архитектура
+- обнови README-файлы, если изменился запуск, структура или UX
 
-When reviewing your own work, check for:
-- broken auth/session flow
-- missing ownership checks
-- command/query inconsistency
-- projection drift
-- outbox publication failures
-- stale cache invalidation
-- export job failure handling
-- Docker Compose breakage
-- stale docs
-- TypeScript type drift
-- missing Rust error handling
+Финальный набор проверок к последней фазе:
 
-## Communication rules
+- `cargo fmt --check`
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- `cargo test --workspace --all-features`
+- `cargo audit`
+- `npm ci`
+- `npm run lint`
+- `npm run typecheck`
+- `npm run build`
+- `npm test`
+- `docker compose up --build -d`
+- `scripts/smoke.sh`
 
-When completing a task:
-- summarize what changed
-- summarize what remains
-- list temporary compatibility layers
-- list known limitations honestly
+## Приоритеты ревью
 
-## Safe defaults
+Проверяй прежде всего:
 
-If something is ambiguous:
-- choose the smallest implementation that still matches the target architecture
-- prefer a working migration step over an idealized rewrite
-- keep the repository understandable
+- гонки старта сервисов
+- гонки миграций
+- сломанный auth/session flow
+- отсутствующие ownership checks
+- рассинхрон command/query
+- drift projection-моделей
+- проблемы публикации outbox
+- stale cache
+- сбои export jobs
+- поломку Docker Compose
+- устаревшую документацию
+- drift TypeScript-типов
+- слабую обработку ошибок в Rust
+- протечки сервисных границ
+- несогласованность REST и gRPC контрактов
+
+## Правила коммуникации
+
+После выполнения задачи возвращай:
+
+- что изменено
+- что осталось сделать
+- какие временные compatibility layers остались
+- какие ограничения и риски ещё есть
+- какие команды проверки были выполнены
+- какие файлы реально изменены
+
+## Безопасные дефолты
+
+Если что-то неоднозначно:
+
+- выбирай минимальную реализацию, которая всё ещё соответствует целевой архитектуре;
+- предпочитай рабочий миграционный шаг идеализированному переписыванию;
+- держи репозиторий понятным;
+- предпочитай детерминированное поведение “умным” трюкам.

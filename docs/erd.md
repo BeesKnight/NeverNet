@@ -1,14 +1,16 @@
-# ERD Notes
+# ERD и структура данных
 
-## Purpose
+## Назначение
 
-This document describes the conceptual schema for EventDesign.
+Этот документ описывает концептуальную схему EventDesign.
 
-The actual SQL schema may evolve, but these relationships reflect the current Phase 3 implementation.
+Это не автогенерированная SQL-спецификация, а человекочитаемая карта write-side, read-side и связей между сущностями.
 
-## Write-side Tables
+## Write-side таблицы
 
 ### users
+
+Поля:
 
 - id (pk)
 - email (unique)
@@ -19,6 +21,8 @@ The actual SQL schema may evolve, but these relationships reflect the current Ph
 
 ### sessions
 
+Поля:
+
 - id (pk)
 - user_id (fk -> users.id)
 - created_at
@@ -27,13 +31,15 @@ The actual SQL schema may evolve, but these relationships reflect the current Ph
 - user_agent
 - ip_address
 
-Notes:
+Назначение:
 
-- browser auth cookies carry a JWT with the session id claim
-- the session row is validated on authenticated requests
-- logout revokes the row by setting `revoked_at`
+- durable browser sessions;
+- server-side session validation;
+- revoke on logout.
 
 ### categories
+
+Поля:
 
 - id (pk)
 - user_id (fk -> users.id)
@@ -43,6 +49,8 @@ Notes:
 - updated_at
 
 ### events
+
+Поля:
 
 - id (pk)
 - user_id (fk -> users.id)
@@ -59,6 +67,8 @@ Notes:
 
 ### ui_settings
 
+Поля:
+
 - user_id (pk, fk -> users.id)
 - theme
 - accent_color
@@ -67,6 +77,8 @@ Notes:
 - updated_at
 
 ### outbox_events
+
+Поля:
 
 - id (pk)
 - aggregate_type
@@ -81,14 +93,17 @@ Notes:
 
 ### export_jobs
 
+Поля:
+
 - id (pk)
 - user_id (fk -> users.id)
 - report_type
 - format
 - status
-- filters
+- filters_json
 - object_key
 - content_type
+- size_bytes
 - error_message
 - created_at
 - started_at
@@ -97,24 +112,27 @@ Notes:
 
 ### processed_messages
 
+Поля:
+
 - consumer_name
 - message_id
 - processed_at
 
-Purpose:
+Назначение:
 
-- deduplicate idempotent consumers such as projection updates
+- durable deduplication для idempotent consumers.
 
-## Read-side Projection Tables
+## Read-side projection tables
 
 ### event_list_projection
 
-Purpose:
+Назначение:
 
-- event list page
-- filter and sort UI
+- список событий;
+- фильтрация;
+- сортировка.
 
-Fields:
+Поля:
 
 - event_id
 - user_id
@@ -133,11 +151,11 @@ Fields:
 
 ### calendar_projection
 
-Purpose:
+Назначение:
 
-- calendar month rendering
+- month/date-bucket rendering календаря.
 
-Fields:
+Поля:
 
 - event_id
 - user_id
@@ -151,11 +169,12 @@ Fields:
 
 ### dashboard_projection
 
-Purpose:
+Назначение:
 
-- dashboard summary cards and quick widgets
+- summary cards;
+- dashboard widgets.
 
-Fields:
+Поля:
 
 - user_id
 - total_events
@@ -167,11 +186,12 @@ Fields:
 
 ### report_projection
 
-Purpose:
+Назначение:
 
-- report preview and export generation queries
+- report preview;
+- база для export generation.
 
-Fields:
+Поля:
 
 - event_id
 - user_id
@@ -190,11 +210,12 @@ Fields:
 
 ### recent_activity_projection
 
-Purpose:
+Назначение:
 
-- recent actions feed
+- recent activity feed;
+- traceability user-visible действий.
 
-Fields:
+Поля:
 
 - id
 - source_message_id
@@ -206,48 +227,59 @@ Fields:
 - occurred_at
 - created_at
 
-## Relationship Summary
+## Основные связи
 
-- one user has many sessions
-- one user has many categories
-- one user has many events
-- one user has one `ui_settings` record
-- one user has many `export_jobs`
-- one category belongs to one user
-- one category can have many events
-- projection rows are derived from write-side events
+- один user имеет много sessions;
+- один user имеет много categories;
+- один user имеет много events;
+- один user имеет одну запись `ui_settings`;
+- один user имеет много `export_jobs`;
+- одна category принадлежит одному user;
+- одна category может иметь много events;
+- projection rows производны от write-side событий.
 
-## Lifecycle Notes
+## Жизненный цикл данных
 
-### Auth/session lifecycle
+### При создании события
 
-1. register or login creates a `sessions` row
-2. Edge API sets the `eventdesign_session` cookie
-3. authenticated requests validate both the JWT and the backing session row
-4. logout revokes the row and clears the cookie
+1. запись пишется в `events`;
+2. outbox event пишется в `outbox_events`;
+3. relay публикует событие;
+4. projector обновляет `event_list_projection`, `calendar_projection`, `dashboard_projection`, `report_projection`;
+5. read-side eventually видит новое событие.
 
-### Event write lifecycle
+### При обновлении события
 
-1. command-side service writes `events`
-2. command-side service writes `outbox_events`
-3. relay publishes the domain event
-4. projector updates read-side tables
+1. запись в `events` меняется;
+2. outbox event фиксирует изменение;
+3. projector переобновляет projections;
+4. dashboard/calendar/reports eventually показывают новую версию.
 
-### Export lifecycle
+### При удалении события
 
-1. report service creates `export_jobs` row
-2. report service writes `export.requested` to outbox
-3. outbox relay publishes the event to JetStream
-4. export worker processes the job
-5. generated file is uploaded to MinIO
-6. `export_jobs` row is updated with result
+1. событие удаляется или помечается удалённым;
+2. outbox фиксирует deletion event;
+3. projector удаляет/обновляет projection rows;
+4. read-side больше не показывает событие.
 
-## Optional Future Additions
+### При создании export job
 
-These may be added later if useful:
+1. `export_jobs` получает `queued`;
+2. outbox фиксирует `export.requested`;
+3. worker берёт задачу, генерирует файл, пишет объект в MinIO;
+4. `export_jobs` получает `completed` или `failed`.
 
-- attachments table
-- event_notes table
-- audit_log table
-- notification_jobs table
-- user_preferences expansion
+## Критические инварианты
+
+Нужно гарантировать:
+
+- согласованность ownership между `events.user_id` и `categories.user_id`;
+- отсутствие foreign key drift;
+- соответствие `export_jobs.status` реальному состоянию storage;
+- отсутствие duplicate processing одного и того же message_id для одного consumer;
+- eventual consistency между write-side state и projection-таблицами.
+
+## Практическая заметка
+
+Этот ERD надо держать в актуальном состоянии.
+Если схема БД изменилась, а документ остался старым, он перестаёт быть полезным и начинает вредить.
