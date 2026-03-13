@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+package eventdesign.internal.reporting.v1;
+
+message ReportAck {
+  string message = 1;
+  string mode = 2;
+}
+
+message SummaryRequest {
+  string user_id = 1;
+  string category_id = 2;
+  string status = 3;
+  string start_date = 4;
+  string end_date = 5;
+}
+
+message CreateExportRequest {
+  string user_id = 1;
+  string report_type = 2;
+  string format = 3;
+  string filters_json = 4;
+}
+
+message GetExportRequest {
+  string user_id = 1;
+  string export_id = 2;
+}
+
+service ReportService {
+  rpc GetSummary(SummaryRequest) returns (ReportAck);
+  rpc CreateExport(CreateExportRequest) returns (ReportAck);
+  rpc GetExportStatus(GetExportRequest) returns (ReportAck);
+}

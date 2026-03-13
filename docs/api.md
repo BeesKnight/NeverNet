@@ -17,6 +17,15 @@ Recommended browser behavior:
 - `credentials: include`
 - CSRF token mechanism for state-changing requests if implemented
 
+## Phase 1 compatibility note
+
+The current Phase 1 external API still keeps the existing compatibility envelope and field naming:
+
+- responses are wrapped as `{ "data": ... }`
+- request and response bodies still use existing snake_case fields such as `full_name`, `category_id`, `start_date`, `end_date`, `default_view`, and `report_type`
+- `POST /api/auth/register` and `POST /api/auth/login` set the `eventdesign_session` HttpOnly cookie
+- `GET /api/auth/me` currently returns the authenticated user payload only; settings remain on `GET /api/settings`
+
 ## Route groups
 
 ### Auth
@@ -29,17 +38,20 @@ Request:
 {
   "email": "user@example.com",
   "password": "secret123",
-  "displayName": "Alex"
+  "full_name": "Alex"
 }
 ```
 
 Response:
 ```json
 {
-  "user": {
-    "id": "uuid",
-    "email": "user@example.com",
-    "displayName": "Alex"
+  "data": {
+    "user": {
+      "id": "uuid",
+      "email": "user@example.com",
+      "full_name": "Alex",
+      "created_at": "2026-03-13T10:00:00Z"
+    }
   }
 }
 ```
@@ -58,10 +70,13 @@ Request:
 Response:
 ```json
 {
-  "user": {
-    "id": "uuid",
-    "email": "user@example.com",
-    "displayName": "Alex"
+  "data": {
+    "user": {
+      "id": "uuid",
+      "email": "user@example.com",
+      "full_name": "Alex",
+      "created_at": "2026-03-13T10:00:00Z"
+    }
   }
 }
 ```
@@ -72,24 +87,23 @@ Clears the current session.
 Response:
 ```json
 {
-  "ok": true
+  "data": "logged_out"
 }
 ```
 
 #### GET /api/auth/me
-Returns the current authenticated user and bootstrap data when useful.
+Returns the current authenticated user.
 
 Response:
 ```json
 {
-  "user": {
-    "id": "uuid",
-    "email": "user@example.com",
-    "displayName": "Alex"
-  },
-  "settings": {
-    "theme": "dark",
-    "defaultView": "dashboard"
+  "data": {
+    "user": {
+      "id": "uuid",
+      "email": "user@example.com",
+      "full_name": "Alex",
+      "created_at": "2026-03-13T10:00:00Z"
+    }
   }
 }
 ```
@@ -292,12 +306,12 @@ Creates an export job.
 Request:
 ```json
 {
-  "reportType": "events-summary",
+  "report_type": "summary",
   "format": "pdf",
   "filters": {
-    "dateFrom": "2026-04-01",
-    "dateTo": "2026-04-30",
-    "categoryId": null,
+    "start_date": "2026-04-01",
+    "end_date": "2026-04-30",
+    "category_id": null,
     "status": null
   }
 }
@@ -346,7 +360,7 @@ Request:
 ```json
 {
   "theme": "dark",
-  "defaultView": "dashboard"
+  "default_view": "dashboard"
 }
 ```
 

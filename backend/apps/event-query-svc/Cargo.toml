@@ -1,0 +1,13 @@
+[package]
+name = "event-query-svc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+contracts = { path = "../../crates/contracts" }
+observability = { path = "../../crates/observability" }
+tokio.workspace = true
+tonic.workspace = true
+tracing.workspace = true
+

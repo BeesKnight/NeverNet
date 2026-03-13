@@ -1,103 +1,131 @@
-# NeverNet
+# EventDesign
 
-NeverNet is a full-stack graduation project for event planning and event management. It is implemented as a practical modular monolith with a React frontend, a Rust backend, PostgreSQL persistence, asynchronous report exports, and a calendar view.
+EventDesign is a graduation project for event planning and event operations.
 
-## Implemented scope
+The repository is now in the Phase 1 foundation state:
 
-- registration, login, logout, password hashing, and protected API routes
-- per-user category management with ownership checks
-- full event CRUD with validation, filtering, and text search
-- dashboard summaries for total, upcoming, completed, and cancelled events
-- reports by date range and category with event-level detail
-- PDF and XLSX export jobs with asynchronous processing
-- persisted UI preferences: theme, accent color, and default start page
-- monthly calendar view for event inspection
+- the backend is a Rust workspace
+- `edge-api` is the only published backend entrypoint
+- `identity-svc` handles registration, login, logout, and current-user lookup over gRPC
+- browser auth uses an HttpOnly cookie flow with `credentials: include`
+- current user-facing features still run end to end
+- Docker Compose includes PostgreSQL, Redis, NATS JetStream, and MinIO
 
-## Repository layout
+## Phase 1 architecture
 
-- `frontend/` React + TypeScript + Vite
-- `backend/` Rust + Axum + SQLx
-- `docs/` architecture and project notes
+```text
+frontend/
+backend/
+  apps/
+    edge-api/
+    identity-svc/
+    event-command-svc/
+    event-query-svc/
+    report-svc/
+    worker/
+  crates/
+    contracts/
+    shared-kernel/
+    persistence/
+    messaging/
+    cache/
+    observability/
+```
 
-## Docker Compose quick start
+What is live now:
 
-Run the full stack with one command:
+- `edge-api` serves the REST API used by the browser
+- `identity-svc` is the active internal auth service
+- `event-command-svc`, `event-query-svc`, `report-svc`, and `worker` are bootable Phase 1 skeletons with explicit contracts
+
+Phase 1 compatibility layers:
+
+- categories, events, calendar, reports, settings, and exports still execute inside `edge-api`
+- export files are still written to the shared local volume at `backend/storage/exports`
+- the cookie session is a signed compatibility token and is not yet backed by durable session storage
+
+## Supported product scope
+
+The following features remain available during the migration:
+
+- registration
+- login and logout
+- categories
+- event CRUD
+- filtering and search
+- reports by period and category
+- PDF and XLSX export jobs
+- UI settings
+- calendar view
+
+## Docker Compose
+
+Start the full stack:
 
 ```bash
 docker compose up --build
 ```
 
-Services started by Compose:
+Published endpoints:
 
-- `frontend` on `http://localhost:3000`
-- `backend` on `http://localhost:8080`
-- `postgres` on the internal Compose network
+- frontend: `http://localhost:3000`
+- edge API: `http://localhost:8080`
+- Redis: `localhost:6379`
+- NATS JetStream client port: `localhost:4222`
+- NATS monitoring: `http://localhost:8222`
+- MinIO API: `http://localhost:9000`
+- MinIO console: `http://localhost:9001`
 
-Compose already wires:
+Compose services:
 
-- PostgreSQL persistence
-- backend migrations on startup
-- frontend reverse proxy to `/api`
-- persistent export storage via a Docker volume
+- `frontend`
+- `edge-api`
+- `identity-svc`
+- `event-command-svc`
+- `event-query-svc`
+- `report-svc`
+- `worker`
+- `db`
+- `redis`
+- `nats`
+- `minio`
 
-To stop and remove containers:
+Stop the stack:
 
 ```bash
 docker compose down
 ```
 
-To also remove the database and export volumes:
+Remove the persistent volumes as well:
 
 ```bash
 docker compose down -v
 ```
 
-If you want a non-demo JWT secret, export `JWT_SECRET` before starting Compose.
+## Local development
 
-## Build optimization
-
-Container builds are optimized for repeat runs:
-
-- backend Dockerfile reuses Cargo dependency layers before source copy
-- BuildKit cache mounts are enabled for Cargo registry/git/target data
-- frontend Dockerfile caches the npm package store and isolates dependency install
-- both services use service-specific `.dockerignore` files to keep build context small
-- frontend ships as static assets behind nginx, so the runtime image stays small
-
-## Local setup without Docker
-
-### 1. Start PostgreSQL
+1. Start infrastructure:
 
 ```bash
-docker compose up -d db
+docker compose up -d db redis nats minio
 ```
 
-### 2. Create environment files
-
-Backend:
+2. Copy environment files:
 
 ```bash
 copy backend\.env.example backend\.env
-```
-
-Frontend:
-
-```bash
 copy frontend\.env.example frontend\.env
 ```
 
-`backend/.env` uses the local Docker database by default. Replace `JWT_SECRET` before non-demo use.
-
-### 3. Run the backend
+3. Run backend services:
 
 ```bash
 cd backend
-cargo run
+cargo run -p identity-svc
+cargo run -p edge-api
 ```
 
-The backend runs on `http://localhost:8080` and applies migrations automatically.
-
-### 4. Run the frontend
+4. Run the frontend:
 
 ```bash
 cd frontend
@@ -105,46 +133,7 @@ npm install
 npm run dev
 ```
 
-The frontend runs on `http://localhost:5173`.
-
-## API endpoints
-
-Auth:
-
-- `POST /api/auth/register`
-- `POST /api/auth/login`
-- `POST /api/auth/logout`
-- `GET /api/auth/me`
-
-Categories:
-
-- `GET /api/categories`
-- `POST /api/categories`
-- `PATCH /api/categories/{id}`
-- `DELETE /api/categories/{id}`
-
-Events:
-
-- `GET /api/events`
-- `GET /api/events/{id}`
-- `POST /api/events`
-- `PATCH /api/events/{id}`
-- `DELETE /api/events/{id}`
-
-Reports and exports:
-
-- `GET /api/reports/summary`
-- `GET /api/reports/by-category`
-- `GET /api/calendar`
-- `GET /api/exports`
-- `GET /api/exports/{id}`
-- `POST /api/exports`
-- `GET /api/exports/{id}/download`
-
-Settings:
-
-- `GET /api/settings`
-- `PATCH /api/settings`
+Local frontend development uses a Vite proxy to forward `/api` requests to `http://localhost:8080`.
 
 ## Quality checks
 
@@ -152,9 +141,8 @@ Backend:
 
 ```bash
 cd backend
-cargo fmt
-cargo check
-cargo test
+cargo fmt --all
+cargo check --workspace
 ```
 
 Frontend:
@@ -165,17 +153,11 @@ npm run lint
 npm run build
 ```
 
-## Notes
-
-- export files are written to `backend/storage/exports/`
-- export jobs are asynchronous but intentionally stay inside the backend process to keep local setup simple
-- category deletion is blocked while events still reference that category
-- no demo seed is included; use the registration flow to create the first user
-
 ## Known limitations
 
-- export processing is in-process, not a separate worker binary
-- the dashboard recent activity is event-based and does not yet include an audit log
-- PDF export is text-first and optimized for defendable completeness rather than polished print layout
+- the write/query/report services are scaffolded but not authoritative yet
+- the async backbone is configured locally but not fully migrated into the business flow
+- exports still complete through the `edge-api` compatibility path and shared filesystem storage
+- CSRF protection and durable session persistence are still Phase 2 and Phase 3 work
 
-See [docs/architecture.md](/docs/architecture.md) for the module breakdown.
+See [docs/architecture.md](/docs/architecture.md) and [docs/delivery-plan.md](/docs/delivery-plan.md) for the migration direction.

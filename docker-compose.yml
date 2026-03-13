@@ -1,4 +1,4 @@
-name: nevernet
+name: eventdesign
 
 services:
   db:
@@ -17,19 +17,119 @@ services:
       start_period: 5s
     restart: unless-stopped
 
-  backend:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+  nats:
+    image: nats:2-alpine
+    command: ["-js", "-m", "8222"]
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    restart: unless-stopped
+
+  minio:
+    image: quay.io/minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: eventdesign
+      MINIO_ROOT_PASSWORD: eventdesign123
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    restart: unless-stopped
+
+  identity-svc:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      args:
+        APP_NAME: identity-svc
     depends_on:
       db:
         condition: service_healthy
     environment:
       DATABASE_URL: postgres://eventdesign:eventdesign@db:5432/eventdesign
       JWT_SECRET: ${JWT_SECRET:-replace-with-a-long-secret}
+      GRPC_PORT: 50051
+      RUST_LOG: identity_svc=info
+    restart: unless-stopped
+
+  event-command-svc:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        APP_NAME: event-command-svc
+    environment:
+      GRPC_PORT: 50052
+      RUST_LOG: event_command_svc=info
+    restart: unless-stopped
+
+  event-query-svc:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        APP_NAME: event-query-svc
+    environment:
+      GRPC_PORT: 50053
+      RUST_LOG: event_query_svc=info
+    restart: unless-stopped
+
+  report-svc:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        APP_NAME: report-svc
+    environment:
+      GRPC_PORT: 50054
+      RUST_LOG: report_svc=info
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        APP_NAME: worker
+    depends_on:
+      - redis
+      - nats
+      - minio
+    environment:
+      REDIS_URL: redis://redis:6379
+      NATS_URL: nats://nats:4222
+      MINIO_ENDPOINT: http://minio:9000
+      RUST_LOG: worker=info
+    restart: unless-stopped
+
+  edge-api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        APP_NAME: edge-api
+    depends_on:
+      db:
+        condition: service_healthy
+      identity-svc:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgres://eventdesign:eventdesign@db:5432/eventdesign
+      JWT_SECRET: ${JWT_SECRET:-replace-with-a-long-secret}
       PORT: 8080
       EXPORT_DIR: /app/storage/exports
-      RUST_LOG: backend=info,tower_http=info
+      IDENTITY_SERVICE_URL: http://identity-svc:50051
+      FRONTEND_ORIGINS: http://localhost:3000,http://localhost:5173
+      AUTH_COOKIE_SECURE: "false"
+      RUST_LOG: edge_api=info,tower_http=info
     volumes:
       - backend_exports:/app/storage/exports
     ports:
@@ -43,7 +143,7 @@ services:
       args:
         VITE_API_BASE_URL: /api
     depends_on:
-      - backend
+      - edge-api
     ports:
       - "3000:80"
     restart: unless-stopped
@@ -51,3 +151,4 @@ services:
 volumes:
   postgres_data:
   backend_exports:
+  minio_data:

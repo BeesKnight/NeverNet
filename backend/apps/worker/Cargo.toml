@@ -1,0 +1,13 @@
+[package]
+name = "worker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cache = { path = "../../crates/cache" }
+messaging = { path = "../../crates/messaging" }
+observability = { path = "../../crates/observability" }
+tokio.workspace = true
+tracing.workspace = true
+

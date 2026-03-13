@@ -28,18 +28,18 @@ const DEFAULT_FILTERS: EventFilters = {
 
 export function EventsPage() {
   const { session } = useAuth()
-  const token = session?.token ?? ''
   const [filters, setFilters] = useState<EventFilters>(DEFAULT_FILTERS)
   const [editingEvent, setEditingEvent] = useState<Event | null>(null)
   const queryClient = useQueryClient()
 
   const categoriesQuery = useQuery({
-    queryKey: ['categories', 'events'],
-    queryFn: () => apiRequest<Category[]>('/categories', { token }),
+    queryKey: ['categories', session?.user.id, 'events'],
+    queryFn: () => apiRequest<Category[]>('/categories'),
+    enabled: Boolean(session?.user.id),
   })
 
   const eventsQuery = useQuery({
-    queryKey: ['events', filters],
+    queryKey: ['events', session?.user.id, filters],
     queryFn: () =>
       apiRequest<Event[]>(
         `/events${buildQueryString({
@@ -49,8 +49,8 @@ export function EventsPage() {
           start_date: filters.start_date || undefined,
           end_date: filters.end_date || undefined,
         })}`,
-        { token },
       ),
+    enabled: Boolean(session?.user.id),
   })
 
   const saveEvent = useMutation({
@@ -58,14 +58,12 @@ export function EventsPage() {
       if (editingEvent) {
         return apiRequest<EventRecord>(`/events/${editingEvent.id}`, {
           method: 'PATCH',
-          token,
           body: JSON.stringify(values),
         })
       }
 
       return apiRequest<EventRecord>('/events', {
         method: 'POST',
-        token,
         body: JSON.stringify(values),
       })
     },
@@ -79,7 +77,6 @@ export function EventsPage() {
     mutationFn: (eventId: string) =>
       apiRequest(`/events/${eventId}`, {
         method: 'DELETE',
-        token,
       }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['events'] })

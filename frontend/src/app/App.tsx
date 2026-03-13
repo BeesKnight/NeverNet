@@ -30,8 +30,8 @@ export function App() {
 
   const settingsQuery = useQuery({
     queryKey: ['settings', 'theme-sync', auth.session?.user.id],
-    queryFn: () => apiRequest<UiSettings>('/settings', { token: auth.session?.token }),
-    enabled: Boolean(auth.session?.token),
+    queryFn: () => apiRequest<UiSettings>('/settings'),
+    enabled: Boolean(auth.session?.user.id),
   })
 
   useEffect(() => {

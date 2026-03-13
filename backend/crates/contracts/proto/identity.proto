@@ -1,0 +1,48 @@
+syntax = "proto3";
+
+package eventdesign.internal.identity.v1;
+
+message User {
+  string id = 1;
+  string email = 2;
+  string full_name = 3;
+  string created_at = 4;
+}
+
+message RegisterRequest {
+  string email = 1;
+  string password = 2;
+  string full_name = 3;
+}
+
+message LoginRequest {
+  string email = 1;
+  string password = 2;
+}
+
+message AuthReply {
+  string token = 1;
+  User user = 2;
+}
+
+message CurrentUserRequest {
+  string token = 1;
+}
+
+message LogoutRequest {
+  string token = 1;
+}
+
+message UserReply {
+  User user = 1;
+}
+
+message Empty {}
+
+service IdentityService {
+  rpc Register(RegisterRequest) returns (AuthReply);
+  rpc Login(LoginRequest) returns (AuthReply);
+  rpc Logout(LogoutRequest) returns (Empty);
+  rpc GetCurrentUser(CurrentUserRequest) returns (UserReply);
+}
+

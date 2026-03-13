@@ -15,7 +15,7 @@ export function LoginPage() {
   return (
     <div className="auth-shell">
       <section className="auth-panel">
-        <p className="eyebrow">NeverNet</p>
+        <p className="eyebrow">EventDesign</p>
         <h1>Run event planning, reporting, and exports from one workspace.</h1>
         <p className="panel-copy">
           Sign in to manage categories, track execution status, inspect the calendar, and export reports.

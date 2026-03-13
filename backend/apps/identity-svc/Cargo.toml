@@ -1,0 +1,23 @@
+[package]
+name = "identity-svc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+argon2.workspace = true
+chrono.workspace = true
+contracts = { path = "../../crates/contracts" }
+dotenvy.workspace = true
+observability = { path = "../../crates/observability" }
+persistence = { path = "../../crates/persistence" }
+rand_core.workspace = true
+serde.workspace = true
+shared-kernel = { path = "../../crates/shared-kernel" }
+sqlx.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tonic.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+

@@ -1,6 +1,6 @@
 import type { ApiResponse } from './types'
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080/api'
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api'
 
 export class ApiError extends Error {
   status: number
@@ -11,9 +11,7 @@ export class ApiError extends Error {
   }
 }
 
-type RequestOptions = RequestInit & {
-  token?: string | null
-}
+type RequestOptions = RequestInit
 
 export async function apiRequest<T>(
   path: string,
@@ -26,12 +24,9 @@ export async function apiRequest<T>(
     headers.set('Content-Type', 'application/json')
   }
 
-  if (options.token) {
-    headers.set('Authorization', `Bearer ${options.token}`)
-  }
-
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
+    credentials: options.credentials ?? 'include',
     headers,
   })
 
@@ -45,11 +40,9 @@ export async function apiRequest<T>(
   return payload.data
 }
 
-export async function apiDownload(path: string, token: string, fileName: string) {
+export async function apiDownload(path: string, fileName: string) {
   const response = await fetch(`${API_BASE_URL}${path}`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
+    credentials: 'include',
   })
 
   if (!response.ok) {

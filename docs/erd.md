@@ -26,6 +26,9 @@ The actual SQL schema may evolve, but these relationships are the baseline.
 - user_agent
 - ip_address
 
+Phase 1 compatibility note:
+- the table is part of the target model, but the current implementation still uses a signed cookie compatibility session
+
 ### categories
 - id (pk)
 - user_id (fk -> users.id)

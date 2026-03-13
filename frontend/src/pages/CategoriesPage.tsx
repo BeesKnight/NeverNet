@@ -9,13 +9,13 @@ import { useAuth } from '../features/auth/auth-context'
 
 export function CategoriesPage() {
   const { session } = useAuth()
-  const token = session?.token ?? ''
   const [editingCategory, setEditingCategory] = useState<Category | null>(null)
   const queryClient = useQueryClient()
 
   const categoriesQuery = useQuery({
-    queryKey: ['categories'],
-    queryFn: () => apiRequest<Category[]>('/categories', { token }),
+    queryKey: ['categories', session?.user.id],
+    queryFn: () => apiRequest<Category[]>('/categories'),
+    enabled: Boolean(session?.user.id),
   })
 
   const saveCategory = useMutation({
@@ -23,14 +23,12 @@ export function CategoriesPage() {
       if (editingCategory) {
         return apiRequest<Category>(`/categories/${editingCategory.id}`, {
           method: 'PATCH',
-          token,
           body: JSON.stringify(values),
         })
       }
 
       return apiRequest<Category>('/categories', {
         method: 'POST',
-        token,
         body: JSON.stringify(values),
       })
     },
@@ -44,7 +42,6 @@ export function CategoriesPage() {
     mutationFn: (categoryId: string) =>
       apiRequest('/categories/' + categoryId, {
         method: 'DELETE',
-        token,
       }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['categories'] })

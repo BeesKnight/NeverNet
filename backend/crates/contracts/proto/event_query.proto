@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+package eventdesign.internal.eventquery.v1;
+
+message QueryAck {
+  string message = 1;
+  string mode = 2;
+}
+
+message ListCategoriesRequest {
+  string user_id = 1;
+}
+
+message ListEventsRequest {
+  string user_id = 1;
+  string search = 2;
+  string status = 3;
+  string category_id = 4;
+  string start_date = 5;
+  string end_date = 6;
+}
+
+message GetEventRequest {
+  string user_id = 1;
+  string event_id = 2;
+}
+
+message GetCalendarRequest {
+  string user_id = 1;
+  string month = 2;
+  string year = 3;
+}
+
+message GetDashboardRequest {
+  string user_id = 1;
+}
+
+service EventQueryService {
+  rpc ListCategories(ListCategoriesRequest) returns (QueryAck);
+  rpc ListEvents(ListEventsRequest) returns (QueryAck);
+  rpc GetEvent(GetEventRequest) returns (QueryAck);
+  rpc GetCalendar(GetCalendarRequest) returns (QueryAck);
+  rpc GetDashboard(GetDashboardRequest) returns (QueryAck);
+}
+

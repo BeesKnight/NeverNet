@@ -6,19 +6,18 @@ import { useAuth } from '../features/auth/auth-context'
 
 export function SettingsPage() {
   const { session } = useAuth()
-  const token = session?.token ?? ''
   const queryClient = useQueryClient()
 
   const settingsQuery = useQuery({
     queryKey: ['settings', session?.user.id],
-    queryFn: () => apiRequest<UiSettings>('/settings', { token }),
+    queryFn: () => apiRequest<UiSettings>('/settings'),
+    enabled: Boolean(session?.user.id),
   })
 
   const updateSettings = useMutation({
     mutationFn: (payload: Partial<Pick<UiSettings, 'theme' | 'accent_color' | 'default_view'>>) =>
       apiRequest<UiSettings>('/settings', {
         method: 'PATCH',
-        token,
         body: JSON.stringify(payload),
       }),
     onSuccess: async () => {

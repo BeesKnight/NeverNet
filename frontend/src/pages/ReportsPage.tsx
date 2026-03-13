@@ -15,13 +15,13 @@ const DEFAULT_FILTERS: EventFilters = {
 
 export function ReportsPage() {
   const { session } = useAuth()
-  const token = session?.token ?? ''
   const [filters, setFilters] = useState<EventFilters>(DEFAULT_FILTERS)
   const queryClient = useQueryClient()
 
   const categoriesQuery = useQuery({
     queryKey: ['categories', session?.user.id, 'reports'],
-    queryFn: () => apiRequest<Category[]>('/categories', { token }),
+    queryFn: () => apiRequest<Category[]>('/categories'),
+    enabled: Boolean(session?.user.id),
   })
 
   const reportQuery = useQuery({
@@ -34,13 +34,14 @@ export function ReportsPage() {
           start_date: filters.start_date || undefined,
           end_date: filters.end_date || undefined,
         })}`,
-        { token },
       ),
+    enabled: Boolean(session?.user.id),
   })
 
   const exportsQuery = useQuery({
     queryKey: ['exports', session?.user.id],
-    queryFn: () => apiRequest<ExportJob[]>('/exports', { token }),
+    queryFn: () => apiRequest<ExportJob[]>('/exports'),
+    enabled: Boolean(session?.user.id),
     refetchInterval: (query) => {
       const jobs = query.state.data ?? []
       return jobs.some((job) => job.status === 'pending' || job.status === 'processing')
@@ -53,7 +54,6 @@ export function ReportsPage() {
     mutationFn: (formatName: 'pdf' | 'xlsx') =>
       apiRequest<ExportJob>('/exports', {
         method: 'POST',
-        token,
         body: JSON.stringify({
           report_type: 'summary',
           format: formatName,
@@ -302,7 +302,7 @@ export function ReportsPage() {
                       <button
                         className="ghost-button"
                         type="button"
-                        onClick={() => apiDownload(`/exports/${job.id}/download`, token, `event-report-${job.id}.${job.format}`)}
+                        onClick={() => apiDownload(`/exports/${job.id}/download`, `eventdesign-report-${job.id}.${job.format}`)}
                       >
                         Download
                       </button>

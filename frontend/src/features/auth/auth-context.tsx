@@ -8,9 +8,8 @@ import {
 } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 
-import { apiRequest } from '../../api/client'
+import { ApiError, apiRequest } from '../../api/client'
 import type { AuthResponse, User } from '../../api/types'
-import { clearSession, getStoredSession, saveSession } from './auth-storage'
 
 type LoginPayload = {
   email: string
@@ -34,45 +33,29 @@ const AuthContext = createContext<AuthContextValue | null>(null)
 
 export function AuthProvider({ children }: PropsWithChildren) {
   const queryClient = useQueryClient()
-  const [session, setSession] = useState<AuthResponse | null>(() => getStoredSession())
-  const [isInitializing, setIsInitializing] = useState(() => Boolean(getStoredSession()?.token))
+  const [session, setSession] = useState<AuthResponse | null>(null)
+  const [isInitializing, setIsInitializing] = useState(true)
 
   useEffect(() => {
-    const token = session?.token
-
-    if (!token) {
-      return
-    }
-
     let isCancelled = false
 
-    apiRequest<User>('/auth/me', { token })
-      .then((user) => {
+    apiRequest<AuthResponse>('/auth/me')
+      .then((nextSession) => {
+        if (!isCancelled) {
+          setSession(nextSession)
+        }
+      })
+      .catch((error) => {
         if (isCancelled) {
           return
         }
 
-        setSession((current) => {
-          if (!current || current.token !== token) {
-            return current
-          }
-
-          const nextSession = {
-            ...current,
-            user,
-          }
-          saveSession(nextSession)
-          return nextSession
-        })
-      })
-      .catch(() => {
-        if (isCancelled) {
-          return
+        if (!(error instanceof ApiError && error.status === 401)) {
+          console.error(error)
         }
 
         queryClient.clear()
         setSession(null)
-        clearSession()
       })
       .finally(() => {
         if (!isCancelled) {
@@ -83,7 +66,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     return () => {
       isCancelled = true
     }
-  }, [queryClient, session?.token])
+  }, [queryClient])
 
   const value = useMemo<AuthContextValue>(
     () => ({
@@ -96,7 +79,6 @@ export function AuthProvider({ children }: PropsWithChildren) {
         })
         queryClient.clear()
         setSession(nextSession)
-        saveSession(nextSession)
       },
       async register(payload) {
         const nextSession = await apiRequest<AuthResponse>('/auth/register', {
@@ -105,21 +87,15 @@ export function AuthProvider({ children }: PropsWithChildren) {
         })
         queryClient.clear()
         setSession(nextSession)
-        saveSession(nextSession)
       },
       logout() {
-        const token = session?.token
         queryClient.clear()
-        clearSession()
         setSession(null)
         setIsInitializing(false)
 
-        if (token) {
-          void apiRequest('/auth/logout', {
-            method: 'POST',
-            token,
-          }).catch(() => undefined)
-        }
+        void apiRequest('/auth/logout', {
+          method: 'POST',
+        }).catch(() => undefined)
       },
       updateUser(user) {
         setSession((current) => {
@@ -127,9 +103,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
             return current
           }
 
-          const nextSession = { ...current, user }
-          saveSession(nextSession)
-          return nextSession
+          return { ...current, user }
         })
       },
     }),

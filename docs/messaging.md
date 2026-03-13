@@ -10,6 +10,16 @@ The architecture uses:
 - NATS JetStream for event transport
 - worker consumers for projections, exports, and side effects
 
+## Phase 1 note
+
+The repository now starts Redis, NATS JetStream, MinIO, and a worker skeleton through Docker Compose.
+
+What is not migrated yet:
+
+- category, event, report, and export business flows still execute inside `edge-api`
+- outbox publishing and worker consumers are still the target Phase 2 direction
+- export files are still produced through the compatibility path and stored on shared local disk
+
 ## Why this exists
 
 The async backbone is used to:
@@ -156,6 +166,12 @@ Avoid manual invalidation scattered across unrelated codepaths.
 7. artifact is uploaded to MinIO
 8. export job is marked completed or failed
 9. frontend polls or refreshes job status
+
+Phase 1 compatibility:
+
+- `edge-api` still creates the export job directly
+- the current implementation still writes the artifact to local shared storage
+- `report-svc` and the worker remain the target flow for the next phase
 
 ## What should not go through async flow
 

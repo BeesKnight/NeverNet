@@ -16,7 +16,7 @@ export function RegisterPage() {
   return (
     <div className="auth-shell">
       <section className="auth-panel">
-        <p className="eyebrow">NeverNet</p>
+        <p className="eyebrow">EventDesign</p>
         <h1>Create an event workspace that stays practical.</h1>
         <p className="panel-copy">
           Registration creates your account and your default interface preferences in one step.

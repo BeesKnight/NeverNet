@@ -1,6 +1,6 @@
-# NeverNet Frontend
+# EventDesign Frontend
 
-React + TypeScript + Vite client for the NeverNet event planning system.
+React + TypeScript + Vite client for EventDesign.
 
 ## Commands
 
@@ -13,10 +13,13 @@ npm run build
 
 ## Environment
 
-Copy `.env.example` to `.env` and point `VITE_API_BASE_URL` at the backend API.
+Copy `.env.example` to `.env`.
 
-Default local value:
+Default local values:
 
 ```bash
-VITE_API_BASE_URL=http://localhost:8080/api
+VITE_API_BASE_URL=/api
+VITE_EDGE_API_ORIGIN=http://localhost:8080
 ```
+
+The development server proxies `/api` to `VITE_EDGE_API_ORIGIN`, so browser auth can stay on the cookie-based flow without storing tokens in the client.

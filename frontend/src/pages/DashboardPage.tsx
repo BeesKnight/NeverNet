@@ -7,21 +7,23 @@ import { useAuth } from '../features/auth/auth-context'
 
 export function DashboardPage() {
   const { session } = useAuth()
-  const token = session?.token ?? ''
 
   const eventsQuery = useQuery({
     queryKey: ['events', session?.user.id, 'dashboard'],
-    queryFn: () => apiRequest<Event[]>('/events', { token }),
+    queryFn: () => apiRequest<Event[]>('/events'),
+    enabled: Boolean(session?.user.id),
   })
 
   const reportsQuery = useQuery({
     queryKey: ['reports', session?.user.id, 'dashboard'],
-    queryFn: () => apiRequest<ReportSummary>('/reports/summary', { token }),
+    queryFn: () => apiRequest<ReportSummary>('/reports/summary'),
+    enabled: Boolean(session?.user.id),
   })
 
   const exportsQuery = useQuery({
     queryKey: ['exports', session?.user.id, 'dashboard'],
-    queryFn: () => apiRequest<ExportJob[]>('/exports', { token }),
+    queryFn: () => apiRequest<ExportJob[]>('/exports'),
+    enabled: Boolean(session?.user.id),
   })
 
   const events = eventsQuery.data ?? []

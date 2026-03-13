@@ -1,0 +1,66 @@
+syntax = "proto3";
+
+package eventdesign.internal.eventcommand.v1;
+
+message CommandAck {
+  string message = 1;
+  string mode = 2;
+}
+
+message CreateCategoryRequest {
+  string user_id = 1;
+  string name = 2;
+  string color = 3;
+}
+
+message UpdateCategoryRequest {
+  string user_id = 1;
+  string category_id = 2;
+  string name = 3;
+  string color = 4;
+}
+
+message DeleteCategoryRequest {
+  string user_id = 1;
+  string category_id = 2;
+}
+
+message CreateEventRequest {
+  string user_id = 1;
+  string category_id = 2;
+  string title = 3;
+  string description = 4;
+  string location = 5;
+  string starts_at = 6;
+  string ends_at = 7;
+  double budget = 8;
+  string status = 9;
+}
+
+message UpdateEventRequest {
+  string user_id = 1;
+  string event_id = 2;
+  string category_id = 3;
+  string title = 4;
+  string description = 5;
+  string location = 6;
+  string starts_at = 7;
+  string ends_at = 8;
+  double budget = 9;
+  string status = 10;
+}
+
+message DeleteEventRequest {
+  string user_id = 1;
+  string event_id = 2;
+}
+
+service EventCommandService {
+  rpc CreateCategory(CreateCategoryRequest) returns (CommandAck);
+  rpc UpdateCategory(UpdateCategoryRequest) returns (CommandAck);
+  rpc DeleteCategory(DeleteCategoryRequest) returns (CommandAck);
+  rpc CreateEvent(CreateEventRequest) returns (CommandAck);
+  rpc UpdateEvent(UpdateEventRequest) returns (CommandAck);
+  rpc DeleteEvent(DeleteEventRequest) returns (CommandAck);
+}
+

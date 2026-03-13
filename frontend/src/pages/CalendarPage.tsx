@@ -19,7 +19,6 @@ import { useAuth } from '../features/auth/auth-context'
 
 export function CalendarPage() {
   const { session } = useAuth()
-  const token = session?.token ?? ''
   const [currentMonth, setCurrentMonth] = useState(() => new Date())
 
   const monthStart = startOfMonth(currentMonth)
@@ -33,8 +32,8 @@ export function CalendarPage() {
           start_date: format(monthStart, 'yyyy-MM-dd'),
           end_date: format(monthEnd, 'yyyy-MM-dd'),
         })}`,
-        { token },
       ),
+    enabled: Boolean(session?.user.id),
   })
 
   const calendarDays = useMemo(() => {

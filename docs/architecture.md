@@ -6,6 +6,24 @@ EventDesign is a high-load inspired full-stack system for event planning and eve
 
 The architecture should look like a production-grade product, while still being practical to implement under deadline pressure.
 
+## Phase 1 Status
+
+The repository is currently in the foundation phase.
+
+Implemented now:
+
+- backend workspace split into app crates and shared crates
+- `edge-api` is the only published backend entrypoint
+- `identity-svc` is live and handles auth over gRPC
+- frontend auth uses an HttpOnly cookie flow and `credentials: include`
+- Docker Compose starts PostgreSQL, Redis, NATS JetStream, and MinIO
+
+Phase 1 compatibility layers:
+
+- categories, events, calendar, reports, settings, and exports still execute inside `edge-api`
+- `event-command-svc`, `event-query-svc`, `report-svc`, and `worker` are service skeletons with explicit contracts
+- export files still land in shared local storage while MinIO is introduced for the next phase
+
 Architecture style:
 
 - React + TypeScript frontend
@@ -28,36 +46,20 @@ Browser
   -> Edge API / BFF
 
 Edge API / BFF
-  -> Identity Service
-  -> Event Command Service
-  -> Event Query Service
-  -> Report Service
+  -> Identity Service (gRPC)
+  -> Phase 1 compatibility modules for categories, events, reports, settings, and exports
+  -> Event Command / Query / Report service contracts
 
 Identity Service
   -> PostgreSQL
-  -> Redis
+  -> signed cookie session compatibility
 
-Event Command Service
-  -> PostgreSQL (write schema)
-  -> Outbox table
-  -> Redis invalidation hints
-
-Outbox Relay / Publisher
-  -> NATS JetStream
-
-NATS JetStream
-  -> Projection Worker
-  -> Export Worker
-  -> Activity / Audit Worker
-
-Event Query Service
-  -> PostgreSQL (read schema / projections)
-  -> Redis cache
-
-Report Service
-  -> PostgreSQL read schema
-  -> MinIO
-  -> export_jobs table
+Phase 2 target
+  -> Event Command Service -> PostgreSQL write schema + outbox
+  -> Outbox Relay / Publisher -> NATS JetStream
+  -> NATS JetStream -> workers and projections
+  -> Event Query Service -> projection/read schema + Redis cache
+  -> Report Service -> read schema + MinIO + export jobs
 
 Frontend
   -> communicates only with Edge API / BFF
@@ -213,6 +215,11 @@ Authentication should use:
 - ownership checks on all user resources
 - CSRF protection for state-changing requests
 - rate limiting at Edge API
+
+Phase 1 note:
+
+- the normal browser flow already uses HttpOnly cookies
+- durable session persistence is still a follow-up migration step
 
 ## Storage model
 

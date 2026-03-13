@@ -35,6 +35,24 @@ After Phase 1:
 - environment cleanup
 - docs update
 
+### Phase 1 implementation status
+
+Implemented:
+
+- repo rebranded to EventDesign
+- backend workspace and target app/crate skeleton created
+- `edge-api` is the only published backend service
+- `identity-svc` is live and handles auth through internal gRPC contracts
+- frontend auth moved off `localStorage` to HttpOnly cookie flow
+- Compose now includes PostgreSQL, Redis, NATS JetStream, and MinIO
+
+Temporary compatibility layers still present:
+
+- `edge-api` still owns categories, events, calendar, reports, settings, and export execution
+- export files still use shared local storage instead of MinIO object uploads
+- signed cookie compatibility is used until durable session persistence lands
+- command/query/report services and worker are scaffolded but not yet authoritative
+
 ## Phase 2: CQRS and async backbone
 
 ### Objectives

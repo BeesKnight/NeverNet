@@ -85,6 +85,7 @@ Rules:
 - sessions belong to users
 - revoked sessions are invalid
 - session validation must support logout and cookie revocation
+- Phase 1 compatibility currently uses a signed HttpOnly cookie and defers durable session persistence
 
 ### Category
 
