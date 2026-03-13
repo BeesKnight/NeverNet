@@ -1,7 +1,8 @@
 use chrono::{DateTime, Utc};
 use contracts::identity::identity_service_client::IdentityServiceClient;
 use contracts::identity::{
-    LoginRequest as IdentityLoginRequest, LogoutRequest, RegisterRequest as IdentityRegisterRequest,
+    CurrentUserRequest, LoginRequest as IdentityLoginRequest, LogoutRequest,
+    RegisterRequest as IdentityRegisterRequest,
 };
 use tonic::transport::Channel;
 use uuid::Uuid;
@@ -11,7 +12,7 @@ use crate::{
     auth::models::{LoginRequest, RegisterRequest},
     error::AppError,
     shared::grpc,
-    users::{models::UserProfile, repository as users_repository},
+    users::models::UserProfile,
 };
 
 pub struct AuthenticatedSession {
@@ -61,13 +62,16 @@ pub async fn login(
 }
 
 pub async fn get_current_user(state: &AppState, token: &str) -> Result<UserProfile, AppError> {
-    let claims = shared_kernel::auth::decode_token(&state.config.jwt_secret, token)
-        .map_err(|_| AppError::Unauthorized("Invalid or expired token".to_string()))?;
-    let user = users_repository::find_by_id(&state.pool, claims.sub)
-        .await?
-        .ok_or_else(|| AppError::Unauthorized("User session is no longer valid".to_string()))?;
+    let mut client = identity_client(state).await?;
+    let reply = client
+        .get_current_user(CurrentUserRequest {
+            token: token.to_string(),
+        })
+        .await
+        .map_err(map_identity_status)?
+        .into_inner();
 
-    Ok(user.into())
+    map_identity_user(reply.user)
 }
 
 pub async fn logout(state: &AppState, token: &str) -> Result<(), AppError> {

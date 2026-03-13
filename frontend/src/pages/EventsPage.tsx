@@ -3,6 +3,7 @@ import { format } from 'date-fns'
 import { useState } from 'react'
 
 import { apiRequest, buildQueryString } from '../api/client'
+import { invalidateReadSideQueries } from '../api/query-utils'
 import { ErrorState, InlineNotice, LoadingState } from '../components/QueryState'
 import type { Category, Event, EventFilters, EventRecord } from '../api/types'
 import { useAuth } from '../features/auth/auth-context'
@@ -74,7 +75,7 @@ export function EventsPage() {
     },
     onSuccess: async () => {
       setEditingEvent(null)
-      await queryClient.invalidateQueries({ queryKey: ['events'] })
+      await invalidateReadSideQueries(queryClient)
     },
   })
 
@@ -84,7 +85,7 @@ export function EventsPage() {
         method: 'DELETE',
       }),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['events'] })
+      await invalidateReadSideQueries(queryClient)
     },
   })
 

@@ -37,6 +37,30 @@ message UserReply {
   User user = 1;
 }
 
+message UiSettings {
+  string user_id = 1;
+  string theme = 2;
+  string accent_color = 3;
+  string default_view = 4;
+  string created_at = 5;
+  string updated_at = 6;
+}
+
+message GetSettingsRequest {
+  string user_id = 1;
+}
+
+message UpdateSettingsRequest {
+  string user_id = 1;
+  optional string theme = 2;
+  optional string accent_color = 3;
+  optional string default_view = 4;
+}
+
+message SettingsReply {
+  UiSettings settings = 1;
+}
+
 message Empty {}
 
 service IdentityService {
@@ -44,5 +68,6 @@ service IdentityService {
   rpc Login(LoginRequest) returns (AuthReply);
   rpc Logout(LogoutRequest) returns (Empty);
   rpc GetCurrentUser(CurrentUserRequest) returns (UserReply);
+  rpc GetSettings(GetSettingsRequest) returns (SettingsReply);
+  rpc UpdateSettings(UpdateSettingsRequest) returns (SettingsReply);
 }
-

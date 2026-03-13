@@ -2,6 +2,14 @@ export type ApiResponse<T> = {
   data: T
 }
 
+export type ApiErrorResponse = {
+  error: {
+    code: string
+    message: string
+    request_id?: string | null
+  }
+}
+
 export type User = {
   id: string
   email: string

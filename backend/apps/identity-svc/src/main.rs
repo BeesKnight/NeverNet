@@ -2,6 +2,7 @@ mod app_state;
 mod auth;
 mod config;
 mod error;
+mod settings;
 mod users;
 
 use std::sync::Arc;
@@ -9,11 +10,16 @@ use std::sync::Arc;
 use app_state::AppState;
 use auth::models::{LoginRequest, RegisterRequest};
 use contracts::identity::identity_service_server::{IdentityService, IdentityServiceServer};
-use contracts::identity::{AuthReply, CurrentUserRequest, Empty, LogoutRequest, User, UserReply};
+use contracts::identity::{
+    AuthReply, CurrentUserRequest, Empty, GetSettingsRequest, LogoutRequest, SettingsReply,
+    UiSettings as GrpcUiSettings, UpdateSettingsRequest, User, UserReply,
+};
 use persistence::connect_pool;
 use tonic::{Request, Response, Status, transport::Server};
 
-use crate::{config::Config, error::AppError, users::models::UserProfile};
+use crate::{
+    config::Config, error::AppError, settings::models::UiSettings, users::models::UserProfile,
+};
 
 #[derive(Clone)]
 struct IdentityGrpcService {
@@ -86,6 +92,46 @@ impl IdentityService for IdentityGrpcService {
             user: Some(map_user(user)),
         }))
     }
+
+    async fn get_settings(
+        &self,
+        request: Request<GetSettingsRequest>,
+    ) -> Result<Response<SettingsReply>, Status> {
+        let span = observability::grpc_request_span("identity.get_settings", &request);
+        tracing::info!(parent: &span, "grpc request received");
+        let user_id = parse_uuid(&request.get_ref().user_id, "user_id")?;
+        let settings = settings::service::get(&self.state, user_id)
+            .await
+            .map_err(status_from_error)?;
+
+        Ok(Response::new(SettingsReply {
+            settings: Some(map_settings(settings)),
+        }))
+    }
+
+    async fn update_settings(
+        &self,
+        request: Request<UpdateSettingsRequest>,
+    ) -> Result<Response<SettingsReply>, Status> {
+        let span = observability::grpc_request_span("identity.update_settings", &request);
+        tracing::info!(parent: &span, "grpc request received");
+        let user_id = parse_uuid(&request.get_ref().user_id, "user_id")?;
+        let settings = settings::service::update(
+            &self.state,
+            user_id,
+            settings::models::UpdateSettingsRequest {
+                theme: request.get_ref().theme.clone(),
+                accent_color: request.get_ref().accent_color.clone(),
+                default_view: request.get_ref().default_view.clone(),
+            },
+        )
+        .await
+        .map_err(status_from_error)?;
+
+        Ok(Response::new(SettingsReply {
+            settings: Some(map_settings(settings)),
+        }))
+    }
 }
 
 #[tokio::main]
@@ -115,6 +161,21 @@ fn map_user(user: UserProfile) -> User {
         full_name: user.full_name,
         created_at: user.created_at.to_rfc3339(),
     }
+}
+
+fn map_settings(settings: UiSettings) -> GrpcUiSettings {
+    GrpcUiSettings {
+        user_id: settings.user_id.to_string(),
+        theme: settings.theme,
+        accent_color: settings.accent_color,
+        default_view: settings.default_view,
+        created_at: settings.created_at.to_rfc3339(),
+        updated_at: settings.updated_at.to_rfc3339(),
+    }
+}
+
+fn parse_uuid(value: &str, field: &str) -> Result<uuid::Uuid, Status> {
+    uuid::Uuid::parse_str(value).map_err(|_| Status::invalid_argument(format!("Invalid {field}")))
 }
 
 fn status_from_error(error: AppError) -> Status {

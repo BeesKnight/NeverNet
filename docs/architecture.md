@@ -2,295 +2,183 @@
 
 ## Обзор
 
-EventDesign — это highload-inspired full-stack система для планирования мероприятий и управления событиями.
+EventDesign — service-oriented full-stack система для планирования мероприятий.
 
-Архитектура специально сделана заметно сильнее обычного “дипломного CRUD-проекта”, но при этом она обязана оставаться запускаемой локально, понятной и стабильной для защиты.
+После фазы 4 целевая архитектура в коде выглядит так:
 
-Целевая форма системы:
-
-- один публичный фронтенд;
-- один публичный Edge API / BFF;
-- внутренние Rust-сервисы с явными gRPC-границами;
-- CQRS-inspired разделение write и read путей;
-- PostgreSQL outbox для durable domain events;
-- NATS JetStream для async transport;
-- workers для проекций и экспортов;
-- Redis для cache, rate limiting и coordination;
-- MinIO для export artifacts;
-- Prometheus и Grafana для observability.
+- `frontend` говорит только с `edge-api`;
+- `edge-api` не ходит в доменную БД напрямую;
+- внутренние backend-сервисы разделены по ответственности и доступны только по gRPC;
+- write-side изменения публикуются через outbox;
+- read-heavy экраны читают projection tables;
+- экспорт работает асинхронно через worker и MinIO;
+- observability собрана вокруг `x-request-id`, structured logs, `/healthz` и `/metrics`.
 
 ## Топология
 
 ```text
 Browser
   -> Frontend (React/Vite)
-  -> Edge API / BFF (REST/JSON)
+  -> Edge API (REST/JSON, cookies, CSRF)
 
-Startup Bootstrap
-  -> db-migrator -> PostgreSQL migrations
-  -> infra-bootstrap -> MinIO bucket + JetStream stream/consumers
-
-Edge API / BFF
+Edge API
   -> Identity Service (gRPC)
   -> Event Command Service (gRPC)
   -> Event Query Service (gRPC)
   -> Report Service (gRPC)
 
 Identity Service
-  -> PostgreSQL
-  -> Redis (опционально для session acceleration / rate-control integration)
+  -> users
+  -> sessions
+  -> ui_settings
 
 Event Command Service
-  -> PostgreSQL write model
+  -> categories
+  -> events
   -> outbox_events
 
+Event Query Service
+  -> event_list_projection
+  -> calendar_projection
+  -> dashboard_projection
+  -> report_projection
+  -> recent_activity_projection
+  -> Redis dashboard cache
+
 Report Service
-  -> PostgreSQL
+  -> export_jobs
   -> outbox_events
-  -> MinIO metadata / presign integration
+  -> MinIO metadata / download boundary
 
 Worker
   -> outbox relay
   -> JetStream publisher
-  -> projector consumer
-  -> export job processor
-
-Event Query Service
-  -> PostgreSQL read-model / projection tables
-  -> Redis cache
-
-Observability
-  -> Prometheus
-  -> Grafana
+  -> projection consumer
+  -> export consumer
 ```
 
-## Архитектурные цели
-
-Система должна обеспечивать:
-
-- чистый внешний REST API для фронтенда;
-- безопасную browser auth-модель на cookies;
-- явное разделение write и read ответственности;
-- durable async processing для projections и export jobs;
-- быстрые read-пути для dashboard, calendar и reports;
-- детерминированный startup;
-- достаточную observability для локального дебага и защиты.
-
-## Ответственность компонентов
+## Роли сервисов
 
 ### Frontend
 
-Frontend отвечает за:
+- UI, маршрутизация, формы, client-side validation.
+- Только вызовы `edge-api`.
+- Нет знания о внутренней топологии сервисов.
 
-- пользовательский интерфейс и маршрутизацию;
-- простую client-side валидацию;
-- auth-aware UX;
-- вызовы только Edge API;
-- polling/refresh статуса экспортов там, где это нужно.
+### Edge API
 
-Frontend не должен знать внутреннюю топологию сервисов.
+- BFF и browser boundary.
+- CORS, CSRF, cookies, rate limiting.
+- Генерация `x-request-id` на HTTP-входе.
+- gRPC orchestration между внутренними сервисами.
+- Shaping JSON-ответов под frontend.
 
-### Edge API / BFF
+`edge-api` после фазы 4:
 
-Edge API — единственная публичная backend-точка входа.
-
-Он отвечает за:
-
-- browser auth/session boundary;
-- CSRF и CORS enforcement;
-- нормализацию входящих запросов;
-- генерацию и прокидывание request id;
-- orchestration между внутренними сервисами;
-- shaping ответов под нужды фронтенда.
-
-Edge API не должен оставаться “скрытым монолитом” с прямым SQL-доступом к доменным таблицам.
+- не требует `DATABASE_URL`;
+- не держит `PgPool`;
+- не валидирует сессию через SQL;
+- не читает и не пишет `ui_settings` напрямую.
 
 ### Identity Service
 
-Отвечает за:
-
-- регистрацию;
-- login;
-- logout;
-- выпуск и валидацию сессий;
-- password hashing;
-- current-user lookup;
-- revocation checks.
+- Регистрация, login, logout.
+- Валидация активной session.
+- `GetCurrentUser`.
+- Чтение и обновление `ui_settings`.
 
 ### Event Command Service
 
-Отвечает за:
-
-- create/update/delete категорий;
-- create/update/delete мероприятий;
-- ownership validation;
-- enforcement status transitions;
-- write-side бизнес-правила;
-- запись authoritative state;
-- создание outbox events в той же транзакции.
+- Create/update/delete categories.
+- Create/update/delete events.
+- Ownership и business validation.
+- Запись outbox event в той же транзакции.
 
 ### Event Query Service
 
-Отвечает за:
-
-- event list reads;
-- dashboard reads;
-- calendar reads;
-- report preview reads;
-- filtered/sorted query paths;
-- recent activity reads, если реализованы.
-
-Query service должен читать projection-таблицы, а не write-таблицы, там где flow уже доведён до целевой архитектуры.
+- Categories list.
+- Events list / single event.
+- Dashboard.
+- Calendar.
+- Reports preview.
+- Redis cache только для dashboard snapshot.
 
 ### Report Service
 
-Отвечает за:
-
-- создание export jobs;
-- чтение export metadata;
-- download authorization;
-- выдачу presigned URL;
-- report-related orchestration;
-- при необходимости summary/report-specific reads, если они не живут в query service.
-
-### db-migrator
-
-Отвечает за:
-
-- единственное применение SQLx migrations при startup compose-стека;
-- гарантированный прогон схемы до старта runtime-сервисов.
-
-### infra-bootstrap
-
-Отвечает за:
-
-- создание или валидацию MinIO bucket;
-- создание или валидацию JetStream stream;
-- создание или валидацию durable consumers для worker-пайплайна;
-- устранение ручной инициализации инфраструктуры при локальном запуске.
+- Create/list/get/download export jobs.
+- Проверка ownership для export artifacts.
+- Чтение файлов из MinIO.
 
 ### Worker
 
-Отвечает за:
+- Relay из outbox в JetStream.
+- Обновление projection tables.
+- Инвалидация dashboard cache после релевантных domain events.
+- Обработка export lifecycle.
 
-- outbox relay в JetStream;
-- обновление projection-моделей;
-- обработку export jobs;
-- идемпотентную обработку сообщений;
-- durable deduplication через `processed_messages` для projector и terminal export handling;
-- защиту export flow от duplicate claim через Redis lock и monotonic DB status transitions;
-- cache invalidation / cache refresh side effects.
+## Request correlation
 
-## Write path
+Синхронная цепочка запроса устроена так:
 
-Целевой write path:
+1. `edge-api` создает `x-request-id`.
+2. `TraceLayer` кладет `request_id` в HTTP span.
+3. `RequestIdInterceptor` пробрасывает `x-request-id` в gRPC metadata.
+4. Внутренние сервисы создают gRPC span через `observability::grpc_request_span`.
+5. Ошибки внешнего API возвращают `request_id` в error envelope.
 
-1. Frontend вызывает Edge API.
-2. Edge API аутентифицирует и валидирует запрос.
-3. Edge API вызывает внутренний command service.
-4. Command service пишет authoritative state.
-5. Command service пишет matching outbox row в той же DB-транзакции.
-6. Worker relay публикует unpublished outbox rows в JetStream и по каждой строке явно фиксирует успех или ошибку публикации.
-7. Projector consumers обновляют projection-таблицы.
-8. Query service читает обновлённые projections.
+Для async backbone основным коррелятором остается `message_id` / `outbox_event_id`.
 
-## Read path
+## Observability baseline
 
-Целевой read path:
+### HTTP и gRPC
 
-1. Frontend вызывает Edge API.
-2. Edge API аутентифицирует пользователя и обращается к query/report/internal service.
-3. Query service отдаёт оптимизированные projection-backed данные.
-4. Redis при необходимости кэширует hot reads.
-5. Edge API возвращает frontend-shaped JSON.
+- `edge-api` использует `TraceLayer`.
+- Логи поддерживают `LOG_FORMAT=json`.
+- `x-request-id` выставляется наружу в HTTP response headers.
 
-## Зачем здесь CQRS
+### Health и metrics
 
-CQRS здесь нужен потому, что у EventDesign реально разные требования к двум классам операций:
+- Все Rust-сервисы поднимают отдельный metrics server.
+- На metrics port доступны `/metrics` и `/healthz`.
+- У `edge-api` на публичном порту также доступен `GET /healthz`.
 
-- write-side требует корректности, явной бизнес-валидации и транзакционной надёжности;
-- read-side требует скорости, удобных агрегатов, календарного представления, фильтрации, сортировки и отчётных выборок.
+### Базовые метрики
 
-Это не “архитектура ради слова CQRS”.
-Это способ одновременно иметь чистый write-путь и быстрый read-путь.
+- HTTP request count и latency на `edge-api`.
+- Cache hit/miss для dashboard cache.
+- Security event counters.
+- Export duration.
+- Projection lag.
+- Queue lag.
 
-## Зачем нужен async backbone
+## Cache behavior
 
-Async backbone нужен, чтобы:
+### Backend
 
-- не привязывать write-запросы к тяжёлой фоновой работе;
-- держать request latency короткой;
-- обновлять read-model независимо от write-транзакции;
-- генерировать экспорты вне жизненного цикла request-response;
-- иметь defendable production-style архитектуру.
+- `event-query-svc` кэширует только dashboard snapshot в Redis.
+- TTL dashboard cache: 60 секунд.
+- Worker удаляет dashboard cache после category/event изменений.
 
-## Startup и миграции
+### Backend без кэша
 
-Стек обязан стартовать детерминированно.
+- Calendar и reports preview читаются напрямую из projection tables.
+- Дополнительного Redis cache для них нет, чтобы не создавать еще один stale-слой.
 
-Это означает:
+### Frontend
 
-- у инфраструктурных сервисов есть healthchecks;
-- прикладные сервисы зависят от healthy infra и успешного завершения one-shot bootstrap-сервисов;
-- миграции идут через отдельный one-shot `db-migrator`;
-- сервисы не соревнуются друг с другом за изменение схемы;
-- `infra-bootstrap` явно создаёт или валидирует JetStream stream/consumers;
-- `infra-bootstrap` явно создаёт или валидирует MinIO bucket;
-- последовательность запуска compose выглядит так:
-  1. `db`, `redis`, `nats`, `minio`
-  2. `db-migrator`, `infra-bootstrap`
-  3. внутренние backend-сервисы и `worker`
-  4. `edge-api`
-  5. `frontend`
+- Default `staleTime` в TanStack Query: 5 секунд.
+- После category/event mutations инвалидируются `categories`, `events`, `dashboard`, `calendar-events`, `reports`.
 
-## Модель безопасности
+## Архитектурные инварианты
 
-Целевая browser security-модель:
+- Frontend не ходит к внутренним сервисам.
+- `edge-api` не ходит напрямую в domain SQL.
+- Write-side изменения обязаны создавать outbox events.
+- Read-heavy экраны обязаны читать projections.
+- Export artifact считается валидным только если файл реально существует в MinIO.
 
-- HttpOnly session cookie;
-- Secure cookie в production-like окружениях;
-- явная SameSite policy;
-- CSRF token для state-changing browser requests;
-- строгий CORS allowlist;
-- ownership checks на всех user-scoped сущностях;
-- отсутствие выдачи лишних внутренних полей;
-- отсутствие прямого доступа фронтенда к внутренним сервисам.
+## Что остается на фазу 5
 
-## Базовый observability baseline
-
-Обязательный минимум:
-
-- генерация request id на Edge;
-- прокидывание correlation metadata через gRPC;
-- structured logs во всех Rust-сервисах;
-- Prometheus metrics на сервис;
-- Grafana dashboard(ы);
-- health endpoints и metrics endpoints;
-- queue/projection/export метрики там, где это практически возможно.
-
-OpenTelemetry должен быть как минимум учтён архитектурно, но не ценой развала запуска.
-
-## Ключевые риски, которые нужно устранить
-
-Архитектура считается настоящей только если устранены:
-
-- race conditions при старте docker compose;
-- гонки миграций и нестабильный порядок старта;
-- отсутствие bootstrap stream/consumer в JetStream;
-- отсутствие идемпотентности у projector/export flow;
-- export jobs, у которых `completed`, но файл недоступен;
-- прямой domain SQL внутри Edge API;
-- слабая request correlation между сервисами;
-- stale projection или stale cache;
-- отсутствие smoke-проверки всего сквозного сценария.
-
-## Критерий завершённости архитектуры
-
-Архитектура считается доведённой только когда:
-
-- весь стек стартует одной командой;
-- write path гарантированно обновляет read path;
-- export files реально скачиваются;
-- фронтенд стабильно работает с cookie auth;
-- документация совпадает с кодом;
-- demo-flow проходит end-to-end без ручных костылей.
+- Smoke script и повторяемый end-to-end прогон.
+- CI hygiene и более жесткие quality gates.
+- При необходимости расширение correlation story через async backbone.

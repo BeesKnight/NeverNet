@@ -1,10 +1,8 @@
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, Type};
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, Type, PartialEq, Eq)]
-#[sqlx(type_name = "TEXT")]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum EventStatus {
     Planned,
@@ -24,7 +22,7 @@ impl EventStatus {
     }
 }
 
-#[derive(Debug, Clone, FromRow, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Event {
     pub id: Uuid,
     pub user_id: Uuid,
@@ -40,7 +38,7 @@ pub struct Event {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, FromRow, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct EventListItem {
     pub id: Uuid,
     pub user_id: Uuid,

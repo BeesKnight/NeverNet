@@ -1279,37 +1279,6 @@ async fn release_export_lock(redis: &redis::Client, export_lock: ExportLock) {
     }
 }
 
-async fn load_export_job(
-    pool: &PgPool,
-    export_id: Uuid,
-) -> Result<Option<ExportJobRow>, WorkerError> {
-    let job = sqlx::query_as::<_, ExportJobRow>(
-        r#"
-        SELECT
-            id,
-            user_id,
-            report_type,
-            format,
-            status,
-            filters,
-            object_key,
-            content_type,
-            error_message,
-            created_at,
-            started_at,
-            updated_at,
-            finished_at
-        FROM export_jobs
-        WHERE id = $1
-        "#,
-    )
-    .bind(export_id)
-    .fetch_optional(pool)
-    .await?;
-
-    Ok(job)
-}
-
 async fn claim_export_job(
     pool: &PgPool,
     export_id: Uuid,

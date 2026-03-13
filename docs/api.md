@@ -2,33 +2,26 @@
 
 ## Назначение
 
-Этот документ описывает REST API, который Edge API / BFF отдаёт фронтенду.
+Этот документ описывает browser-facing REST API, которое отдает `edge-api`.
 
-Фронтенд общается только с этим API.
-Он не должен вызывать внутренние сервисы напрямую.
+Frontend общается только с ним. Внутренние gRPC контракты сюда не выносятся.
 
-Документ описывает внешний browser-facing контракт, а не внутренние gRPC контракты.
+## Browser security модель
 
-## Browser security-модель
+- Auth хранится в `HttpOnly` cookie `eventdesign_session`.
+- CSRF token выдается через `GET /api/auth/csrf`.
+- State-changing запросы обязаны отправлять `X-CSRF-Token`.
+- Browser использует `credentials: include`.
+- `FRONTEND_ORIGINS` — строгий allowlist без `*`.
+- Для non-local origin требуется `AUTH_COOKIE_SECURE=true`.
 
-Предполагается следующая модель безопасности:
+## Correlation
 
-- браузерная авторизация cookie-based;
-- auth cookie называется `eventdesign_session`;
-- auth cookie выставляется как `HttpOnly`;
-- auth и CSRF cookie используют `SameSite=Lax`;
-- для non-local origin auth cookie должна работать с `Secure`;
-- браузер должен отправлять `credentials: include`;
-- state-changing запросы должны отправлять CSRF token в `X-CSRF-Token`;
-- допустимые frontend origins задаются явным allowlist, например `FRONTEND_ORIGINS`;
-- `FRONTEND_ORIGINS` не должен содержать wildcard `*`;
-- ответы по возможности содержат `x-request-id` или аналогичный correlation id.
+- `edge-api` генерирует `x-request-id`.
+- Заголовок возвращается в HTTP response.
+- При ошибке `request_id` также попадает в JSON envelope.
 
-В нормальном browser flow нельзя использовать `localStorage` bearer tokens или `Authorization: Bearer ...` на внешнем API.
-
-## Общий формат ответов и ошибок
-
-Успешные JSON-ответы должны иметь вид:
+## Формат успешного ответа
 
 ```json
 {
@@ -36,332 +29,113 @@
 }
 ```
 
-Ошибки должны иметь единый envelope, например:
+## Формат ошибки
 
 ```json
 {
   "error": {
-    "code": "validation_error",
+    "code": "bad_request",
     "message": "Человекочитаемое описание ошибки",
-    "request_id": "req_123"
+    "request_id": "6f4d0d7a-..."
   }
 }
 ```
 
-Если текущий код пока возвращает менее богатый формат, он должен быть постепенно приведён к единому виду.
+### Поддерживаемые error codes
 
-## Основные коды ответа
+- `bad_request`
+- `unauthorized`
+- `not_found`
+- `conflict`
+- `rate_limited`
+- `config_error`
+- `internal_error`
 
-- `200` успешное чтение
-- `201` успешное создание
-- `204` успешное удаление без тела
-- `400` ошибка валидации или плохой запрос
-- `401` неаутентифицированный пользователь или ошибка CSRF
-- `403` недостаточно прав / ownership failure
-- `404` ресурс не найден; для foreign object-by-id может использоваться тот же код, чтобы не раскрывать существование чужого объекта
-- `409` конфликт
-- `429` rate limited
-- `500` внутренняя ошибка сервера
+## Health endpoint
+
+- `GET /healthz` — публичный health-check `edge-api`.
+- `/metrics` не торчит на публичном порту и доступен только на metrics port.
 
 ## Группы маршрутов
 
 ### Auth
 
-#### GET `/api/auth/csrf`
+- `GET /api/auth/csrf`
+- `POST /api/auth/register`
+- `POST /api/auth/login`
+- `POST /api/auth/logout`
+- `GET /api/auth/me`
 
-Назначение:
+Особенности:
 
-- выдать CSRF token;
-- выставить CSRF cookie, если это нужно текущей реализации.
-
-Сценарий:
-1. браузер вызывает endpoint перед login/register или перед первым state-changing запросом;
-2. token затем отправляется в `X-CSRF-Token`.
-
-Требования:
-- endpoint доступен без активной сессии;
-- браузер использует тот же origin и `credentials: include`.
-
-#### POST `/api/auth/register`
-
-Назначение:
-
-- создать пользователя;
-- создать активную сессию;
-- выставить `eventdesign_session` cookie.
-
-Требования:
-- валидный CSRF token;
-- email uniqueness;
-- password hashing;
-- session cookie должна быть `HttpOnly`;
-- возврат текущего пользователя в `data`.
-
-#### POST `/api/auth/login`
-
-Назначение:
-
-- проверить credentials;
-- создать durable session;
-- выставить `eventdesign_session` cookie.
-
-Требования:
-- валидный CSRF token;
-- ownership или role checks здесь не нужны, но нужна строгая проверка credentials;
-- session cookie должна быть `HttpOnly`;
-- в ответе должен быть current user.
-
-#### POST `/api/auth/logout`
-
-Назначение:
-
-- отозвать текущую сессию;
-- очистить auth cookie;
-- очистить CSRF cookie.
-
-Требования:
-- валидный CSRF token;
-- logout должен инвалидировать session row, а не только удалить cookie на клиенте.
-
-#### GET `/api/auth/me`
-
-Назначение:
-
-- вернуть current authenticated user;
-- служить bootstrap endpoint для фронтенда.
-
-Требования:
-- корректная обработка просроченной или revoked session;
-- отсутствие лишних внутренних полей в DTO.
+- `edge-api` не валидирует session через SQL.
+- Проверка session и current user идет через `identity-svc`.
 
 ### Categories
 
-#### GET `/api/categories`
+- `GET /api/categories`
+- `POST /api/categories`
+- `PUT|PATCH /api/categories/:id`
+- `DELETE /api/categories/:id`
 
-Возвращает все категории текущего пользователя.
-
-Требования:
-- обязательная аутентификация;
-- нельзя отдавать категории других пользователей.
-
-#### POST `/api/categories`
-
-Создаёт категорию текущего пользователя.
-
-Требования:
-- CSRF;
-- user ownership определяется сервером, а не приходит из клиента;
-- цвет и имя валидируются.
-
-#### PATCH `/api/categories/:id`
-
-Обновляет категорию.
-
-Требования:
-- CSRF;
-- ownership check;
-- нельзя позволять менять category другого пользователя.
-
-#### DELETE `/api/categories/:id`
-
-Удаляет категорию.
-
-Требования:
-- CSRF;
-- ownership check;
-- поведение для категории, используемой событиями, должно быть явно определено.
+Command-side операции уходят в `event-command-svc`, чтение — в `event-query-svc`.
 
 ### Events
 
-#### GET `/api/events`
+- `GET /api/events`
+- `GET /api/events/:id`
+- `POST /api/events`
+- `PUT|PATCH /api/events/:id`
+- `DELETE /api/events/:id`
 
-Возвращает список событий текущего пользователя.
+Query параметры списка:
 
-Поддерживаемые query-параметры:
-
+- `search`
 - `status`
 - `category_id`
-- `search`
-- `from`
-- `to`
+- `start_date`
+- `end_date`
 - `sort_by`
-- `sort_order`
-
-Требования:
-- данные должны приходить из query-side / projections в целевой архитектуре;
-- нельзя возвращать чужие события;
-- сортировка и фильтрация должны быть предсказуемыми.
-
-#### GET `/api/events/:id`
-
-Возвращает одно событие текущего пользователя.
-
-Требования:
-- ownership check;
-- консистентный DTO.
-
-#### POST `/api/events`
-
-Создаёт событие.
-
-Требования:
-- CSRF;
-- category должна принадлежать тому же пользователю;
-- `starts_at < ends_at`;
-- write-side mutation должна создавать outbox event.
-
-#### PATCH `/api/events/:id`
-
-Обновляет событие.
-
-Требования:
-- CSRF;
-- ownership check;
-- status transitions должны быть валидны;
-- mutation должна отражаться в projections через async backbone.
-
-#### DELETE `/api/events/:id`
-
-Удаляет событие.
-
-Требования:
-- CSRF;
-- ownership check;
-- удаление должно eventually отражаться на read-side.
+- `sort_dir`
 
 ### Dashboard
 
-#### GET `/api/dashboard`
+- `GET /api/dashboard`
 
-Возвращает summary cards и быстрые агрегаты текущего пользователя.
-
-Требования:
-- projection-backed reads;
-- отсутствие stale data за пределами допустимого eventual consistency window;
-- при наличии Redis-кэша должен существовать механизм invalidation или TTL.
+Источник данных: `dashboard_projection` через `event-query-svc`, при необходимости через Redis dashboard cache.
 
 ### Calendar
 
-#### GET `/api/calendar`
+- `GET /api/calendar?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD`
 
-Возвращает данные календаря текущего пользователя.
-
-Ожидаемые query-параметры:
-
-- `year`
-- `month`
-
-Требования:
-- projection-backed reads;
-- ownership isolation;
-- консистентное представление статусов и category color.
+Источник данных: `calendar_projection` через `event-query-svc`.
 
 ### Reports
 
-#### GET `/api/reports/summary`
+- `GET /api/reports/summary`
+- `GET /api/reports/by-category`
 
-Возвращает preview summary для отчёта.
-
-Ожидаемые фильтры:
-
-- период;
-- категория;
-- статус;
-- сортировка.
-
-#### GET `/api/reports/by-category`
-
-Возвращает breakdown по категориям.
-
-Требования:
-- query-side read;
-- user scope isolation;
-- корректный набор агрегатов.
-
-### Exports
-
-#### POST `/api/exports`
-
-Создаёт export job.
-
-Требования:
-- CSRF;
-- ownership определяется сервером;
-- payload должен описывать report type, format и фильтры;
-- ответ должен вернуть хотя бы `job_id` и начальный статус.
-
-#### GET `/api/exports`
-
-Возвращает список export jobs текущего пользователя.
-
-Требования:
-- ownership isolation;
-- сортировка по времени / статусу по возможности;
-- completed jobs должны содержать достаточно информации для дальнейшего download flow.
-
-#### GET `/api/exports/:id`
-
-Возвращает состояние одного export job.
-
-Требования:
-- ownership check;
-- completed job должен содержать информацию, достаточную для скачивания, включая `object_key` и `content_type`.
-
-#### GET `/api/exports/:id/download`
-
-Назначение:
-
-- инициировать безопасный проксируемый download через `edge-api`.
-
-Требования:
-- ownership check;
-- completed status;
-- object должен реально существовать в MinIO;
-- completed job не должен считаться валидным для скачивания без `object_key` и `content_type`;
-- нельзя отдавать чужие артефакты.
+Источник данных: `report_projection` через `event-query-svc`.
 
 ### Settings
 
-#### GET `/api/settings`
+- `GET /api/settings`
+- `PUT|PATCH /api/settings`
 
-Возвращает UI settings текущего пользователя.
+`ui_settings` принадлежат `identity-svc`. `edge-api` больше не читает их из БД напрямую.
 
-#### PATCH `/api/settings`
+### Exports
 
-Обновляет UI settings текущего пользователя.
+- `GET /api/exports`
+- `POST /api/exports`
+- `GET /api/exports/:id`
+- `GET /api/exports/:id/download`
 
-Требования:
-- CSRF;
-- ownership определяется сервером;
-- настройки не должны требовать прямого SQL в Edge API в финальной архитектуре.
+Export job создается через `report-svc`, а фоновая обработка идет через outbox + JetStream + worker.
 
-## Общие требования к API
+## Инварианты внешнего API
 
-Во всех user-scoped endpoints должны быть:
-
-- authentication;
-- ownership check;
-- отсутствие browser bearer auth;
-- предсказуемый JSON response shape;
-- request correlation id;
-- внятные ошибки для фронтенда.
-
-## Что не должно быть частью внешнего API
-
-Фронтенд не должен видеть:
-
-- внутренние gRPC DTO;
-- внутренние service ids;
-- outbox metadata;
-- служебные технические поля, не нужные UI;
-- прямой доступ к `/metrics` и служебным internal endpoints.
-
-## Критерий завершённости внешнего API
-
-Внешний API считается доведённым, когда:
-
-- фронтенд закрывает все ключевые сценарии только через Edge API;
-- browser auth стабильно работает с cookies и CSRF;
-- ошибки унифицированы;
-- ownership leaks отсутствуют;
-- export/download flow проходит end-to-end.
+- Нет прямого доступа frontend к внутренним сервисам.
+- Нет bearer auth через `localStorage`.
+- Нет object-level leaks между пользователями.
+- Ответы и ошибки имеют предсказуемую JSON-форму.

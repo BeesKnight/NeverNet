@@ -1,29 +1,6 @@
-# Runbook: запуск, проверка и локальная диагностика
+# Runbook: запуск и диагностика
 
-## Назначение
-
-Этот документ фиксирует рабочий порядок запуска EventDesign после фаз 1-3 и команды для базовой диагностики.
-
-Цель runbook:
-
-- поднять стек одной командой;
-- убедиться, что миграции применились ровно один раз;
-- проверить, что MinIO bucket и JetStream bootstrap действительно созданы;
-- быстро локализовать проблему, если startup или базовый happy-path сломались.
-
-## Предварительные требования
-
-Нужно иметь:
-
-- Docker;
-- Docker Compose;
-- Node.js / npm для локальной работы с `frontend`, если требуется;
-- Rust toolchain для локального запуска backend-приложений вне compose;
-- свободные порты из `docker-compose.yml`.
-
-## Стандартный запуск всего стека
-
-Целевая команда:
+## Полный запуск
 
 ```bash
 docker compose up --build -d
@@ -32,15 +9,13 @@ docker compose up --build -d
 Ожидаемая последовательность:
 
 1. `db`, `redis`, `nats`, `minio` переходят в `healthy`.
-2. `db-migrator` применяет SQLx migrations и завершается с кодом `0`.
-3. `infra-bootstrap` создаёт или валидирует MinIO bucket и JetStream stream/consumers, затем завершается с кодом `0`.
-4. Стартуют `identity-svc`, `event-command-svc`, `event-query-svc`, `report-svc`, `worker`.
-5. После их готовности стартует `edge-api`.
-6. После `edge-api` стартует `frontend`.
+2. `db-migrator` завершается с кодом `0`.
+3. `infra-bootstrap` завершается с кодом `0`.
+4. Поднимаются `identity-svc`, `event-command-svc`, `event-query-svc`, `report-svc`, `worker`.
+5. Поднимается `edge-api`.
+6. Поднимается `frontend`.
 
-## Базовая проверка состояния
-
-Минимальный набор команд после старта:
+## Базовые проверки
 
 ```bash
 docker compose ps
@@ -48,206 +23,75 @@ docker compose logs --no-color
 docker compose logs --no-color db-migrator infra-bootstrap
 ```
 
-Что должно быть видно:
+Критерии:
 
-- `db-migrator` завершился со статусом `Exited (0)`;
-- `infra-bootstrap` завершился со статусом `Exited (0)`;
-- runtime-сервисы находятся в `Up` и не перезапускаются циклически;
-- `edge-api`, `worker`, `report-svc`, `identity-svc`, `event-command-svc`, `event-query-svc` доходят до `healthy`.
+- one-shot сервисы завершились успешно;
+- runtime-сервисы не рестартуются циклически;
+- `edge-api` и metrics endpoints доступны.
 
-## Проверка миграций
+## Health и metrics
 
-Проверить, что миграции действительно применились:
-
-```bash
-docker exec $(docker compose ps -q db) \
-  psql -U eventdesign -d eventdesign \
-  -c "SELECT version, description, success FROM _sqlx_migrations ORDER BY version;"
-```
-
-Ожидаемый результат:
-
-- все migration files из `backend/migrations` присутствуют в `_sqlx_migrations`;
-- `success = true` для каждой записи.
-
-## Проверка MinIO bootstrap
-
-Проверить liveness:
+### Публичный health
 
 ```bash
-curl http://localhost:9000/minio/health/live
+curl http://localhost:8080/healthz
 ```
 
-Проверить bucket:
+### Служебные endpoints
+
+- `http://localhost:9100/metrics` и `http://localhost:9100/healthz` — `edge-api`
+- `http://localhost:9101/metrics` — `identity-svc`
+- `http://localhost:9102/metrics` — `event-command-svc`
+- `http://localhost:9103/metrics` — `event-query-svc`
+- `http://localhost:9104/metrics` — `report-svc`
+- `http://localhost:9105/metrics` — `worker`
+
+## Проверка request correlation
 
 ```bash
-docker exec $(docker compose ps -q minio) sh -c \
-  "mc alias set local http://127.0.0.1:9000 eventdesign eventdesign123 >/dev/null && mc ls local"
+curl -i ^
+  -H "x-request-id: demo-phase4-001" ^
+  http://localhost:8080/healthz
 ```
 
-Ожидаемый результат:
+Что проверить:
 
-- в выводе присутствует bucket `eventdesign-exports/`.
+- в ответе есть `x-request-id`;
+- в логах `edge-api` запрос виден с тем же `request_id`;
+- при gRPC-вызове внутренних сервисов тот же `request_id` попадает в span.
 
-## Проверка JetStream bootstrap
+## Проверка compose-зависимостей
 
-Проверить stream и consumers:
+`edge-api` в фазе 4 не зависит напрямую от PostgreSQL и не требует `DATABASE_URL`.
 
-```bash
-curl "http://localhost:8222/jsz?streams=true&consumers=true"
-```
+Если `edge-api` не стартует, проверять нужно:
 
-Ожидаемый результат:
+- `redis`;
+- `identity-svc`;
+- `event-command-svc`;
+- `event-query-svc`;
+- `report-svc`.
 
-- есть stream `EVENTDESIGN_DOMAIN_EVENTS`;
-- у stream есть consumers `projection-worker` и `export-worker`.
+## Проверка read-side свежести
 
-## Базовый smoke-path
+После create/update/delete category или event:
 
-Минимальный сценарий, который должен работать после старта:
+1. обновить страницу events;
+2. открыть dashboard;
+3. открыть calendar;
+4. открыть reports summary.
 
-1. открыть `frontend`;
-2. получить CSRF token;
-3. зарегистрировать пользователя;
-4. выполнить login;
-5. создать категорию;
-6. создать событие;
-7. открыть список событий;
-8. открыть dashboard;
-9. открыть calendar;
-10. создать export job;
-11. дождаться статуса `completed`;
-12. скачать файл.
+Ожидаемое поведение:
 
-Если один из шагов нестабилен, проект нельзя считать demo-ready.
+- projections догоняют write-side;
+- dashboard cache сбрасывается worker-ом;
+- frontend query cache не держит старое состояние 30 секунд.
 
-## Проверка browser auth и CSRF
+Практически допустимое окно eventual consistency — секунды, а не десятки секунд клиентского cache.
 
-Минимальный инвариант:
+## Полезные локальные команды
 
-- фронтенд работает только через cookie-based session;
-- все `POST` / `PATCH` / `DELETE` идут с `credentials: include`;
-- state-changing запросы отправляют `X-CSRF-Token`, полученный из `GET /api/auth/csrf`;
-- logout очищает `eventdesign_session` и `eventdesign_csrf`.
-
-Если используется non-local origin, проверить:
-
-- origin явно указан в `FRONTEND_ORIGINS`;
-- `FRONTEND_ORIGINS` не содержит `*`;
-- `AUTH_COOKIE_SECURE=true`.
-
-## Локальная разработка по частям
-
-Если нужен запуск без полного compose для приложений:
-
-1. Поднять только инфраструктуру:
-
-```bash
-docker compose up -d db redis nats minio
-```
-
-2. Применить миграции и bootstrap:
-
-```bash
-cd backend
-cargo run -p db-migrator
-cargo run -p infra-bootstrap
-```
-
-3. Запустить backend-сервисы:
-
-```bash
-cargo run -p identity-svc
-cargo run -p event-command-svc
-cargo run -p event-query-svc
-cargo run -p report-svc
-cargo run -p worker
-cargo run -p edge-api
-```
-
-4. Запустить фронтенд:
-
-```bash
-cd ../frontend
-npm install
-npm run dev
-```
-
-## Диагностика типовых проблем
-
-### Проблема: backend не стартует после `docker compose up`
-
-Проверить:
-
-- действительно ли `db`, `redis`, `nats`, `minio` перешли в `healthy`;
-- завершились ли `db-migrator` и `infra-bootstrap` с кодом `0`;
-- нет ли SQL-ошибок в логах `db-migrator`;
-- нет ли ошибок создания bucket/stream/consumer в логах `infra-bootstrap`.
-
-### Проблема: SQL-ошибки на старте
-
-Проверить:
-
-- что `_sqlx_migrations` содержит все migration files;
-- что ни один runtime-сервис не пытается мигрировать БД самостоятельно;
-- что `db-migrator` был единственной точкой применения миграций.
-
-### Проблема: export pipeline падает
-
-Проверить:
-
-- существует ли bucket `eventdesign-exports`;
-- доступен ли MinIO по `http://localhost:9000/minio/health/live`;
-- нет ли ошибок загрузки артефактов в логах `worker` и `report-svc`.
-
-### Проблема: browser login/logout работает нестабильно
-
-Проверить:
-
-- что фронтенд действительно вызывает `GET /api/auth/csrf` перед первым state-changing запросом;
-- что браузер отправляет `credentials: include`;
-- что `FRONTEND_ORIGINS` не содержит wildcard и соответствует реальному origin фронтенда;
-- что для non-local origin включён `AUTH_COOKIE_SECURE=true`;
-- что после logout в таблице `sessions` у текущей строки появился `revoked_at`.
-
-### Проблема: completed export не скачивается
-
-Проверить:
-
-- что строка в `export_jobs` для нужного `id` имеет `status = 'completed'`;
-- что у неё заполнены `object_key` и `content_type`;
-- что объект реально существует в bucket `eventdesign-exports`;
-- что в логах `worker` нет ошибок загрузки в MinIO, а в логах `report-svc` нет ошибок чтения объекта.
-
-### Проблема: события не доходят до read-side
-
-Проверить:
-
-- существует ли stream `EVENTDESIGN_DOMAIN_EVENTS`;
-- существуют ли consumers `projection-worker` и `export-worker`;
-- нет ли ошибок outbox relay и projection consumer в логах `worker`;
-- не маскирует ли проблему stale Redis cache.
-
-## Метрики и observability
-
-Минимально доступны:
-
-- Prometheus: `http://localhost:9090`;
-- Grafana: `http://localhost:3001`;
-- `/metrics` и `/healthz` на metrics-портах backend-сервисов;
-- queue/projection/export метрики там, где они уже реализованы.
-
-## Обязательный прогон перед завершением задачи
-
-Минимум:
-
-```bash
-docker compose up --build -d
-docker compose ps
-docker compose logs --no-color
-```
-
-Дополнительно, если менялся код:
+Backend:
 
 ```bash
 cd backend
@@ -255,8 +99,41 @@ cargo fmt --all
 cargo check --workspace
 ```
 
+Frontend:
+
 ```bash
 cd frontend
 npm run lint
+npm run typecheck
 npm run build
+npm test
 ```
+
+## Типовые проблемы
+
+### `edge-api` отвечает 401/403
+
+Проверить:
+
+- есть ли `eventdesign_session` cookie;
+- был ли запрошен `GET /api/auth/csrf`;
+- отправляется ли `X-CSRF-Token`;
+- жив ли `identity-svc`.
+
+### stale dashboard
+
+Проверить:
+
+- есть ли новые rows в `dashboard_projection`;
+- есть ли ошибки в логах `worker`;
+- сбросился ли Redis key dashboard cache;
+- не осталось ли старое состояние только во frontend query cache.
+
+### export completed, но download не работает
+
+Проверить:
+
+- `export_jobs.status = 'completed'`;
+- заполнены `object_key` и `content_type`;
+- объект реально существует в MinIO;
+- `report-svc` может прочитать объект.

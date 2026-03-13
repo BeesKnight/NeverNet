@@ -2,88 +2,54 @@
 
 ## Назначение
 
-Этот документ описывает внутреннюю асинхронную модель EventDesign.
+EventDesign использует outbox + NATS JetStream, чтобы:
 
-Архитектура использует:
+- не держать write-side запросы на тяжелой фоновой работе;
+- обновлять projections отдельно от command transaction;
+- выполнять экспорт асинхронно;
+- переживать at-least-once delivery без порчи состояния.
 
-- PostgreSQL outbox для durable event capture;
-- NATS JetStream для transport слоя событий;
-- worker consumers для projection updates и export processing.
+## Канонический flow
 
-## Базовые гарантии
+1. Command-side сервис коммитит доменную запись.
+2. В той же транзакции пишет строку в `outbox_events`.
+3. Worker relay публикует envelope в JetStream.
+4. Projection consumer обновляет read-model.
+5. Export consumer забирает `export.requested` и строит файл.
 
-Async backbone считается корректным только если одновременно соблюдаются следующие условия:
+## Ответственность компонентов
 
-- бизнес-запись и соответствующий outbox event коммитятся в одной транзакции;
-- unpublished outbox rows безопасно ретраятся;
-- bootstrap stream и consumer в JetStream детерминирован;
-- projector consumers устойчивы к at-least-once delivery;
-- projection changes идемпотентны;
-- ack сообщения происходит только после durable local handling;
-- export processing защищён от duplicate claim и duplicate work.
+### Event Command Service
 
-## Зачем это вообще нужно
+- authoritative write-side для categories и events;
+- запись domain event в outbox.
 
-Async backbone нужен, чтобы:
+### Report Service
 
-- держать write-запросы быстрыми;
-- не привязывать тяжёлую фоновую работу к latency HTTP-запроса;
-- обновлять projection-модели независимо от write path;
-- выполнять экспорты вне жизненного цикла request-response;
-- иметь defendable production-style архитектуру.
+- создание `export_jobs`;
+- запись `export.requested` в outbox.
 
-## Канонический write path
+### Worker relay
 
-1. command-side или report-side service принимает валидную мутацию;
-2. мутация коммитится в PostgreSQL;
-3. matching outbox event пишется в той же транзакции;
-4. worker relay читает unpublished outbox rows;
-5. relay публикует их в NATS JetStream;
-6. consumer workers обрабатывают события;
-7. projections или export states обновляются;
-8. при необходимости выполняется cache invalidation.
+- читает unpublished outbox rows;
+- публикует в `EVENTDESIGN_DOMAIN_EVENTS`;
+- отдельно фиксирует успешную публикацию или ошибку.
 
-## Таблица outbox
+### Projection consumer
 
-Ожидаемые поля outbox:
+- читает category/event события;
+- обновляет `event_list_projection`, `calendar_projection`, `dashboard_projection`, `report_projection`, `recent_activity_projection`;
+- после релевантных изменений инвалидирует dashboard cache в Redis.
 
-- id
-- aggregate_type
-- aggregate_id
-- event_type
-- event_version
-- payload_json
-- occurred_at
-- published_at
-- publish_attempts
-- last_error
+### Export consumer
 
-Правила:
-
-- вставка в outbox должна происходить в той же DB-транзакции, что и запись authoritative state;
-- `published_at` выставляется только после успешной публикации;
-- каждая неудача публикации увеличивает `publish_attempts`;
-- `last_error` должен сохраняться;
-- relay должен фиксировать результат публикации по каждой строке отдельно, чтобы ошибка одной записи не откатывала весь батч;
-- relay не имеет права “просто молча” терять плохие строки.
-
-## Требования к bootstrap JetStream
-
-Стек должен явно гарантировать:
-
-- stream существует;
-- consumer существует;
-- subjects объявлены и согласованы;
-- durable consumer names стабильны там, где это нужно;
-- локальный запуск не зависит от ручной настройки NATS.
-
-Если создание stream/consumer неявное или manual-only, это надо исправить.
+- обрабатывает `export.requested`;
+- переводит job в `processing`;
+- строит PDF/XLSX из `report_projection`;
+- загружает артефакт в MinIO;
+- завершает job как `completed` или `failed`.
 
 ## Subject naming
-
-Subject names должны быть явными и стабильными.
-
-Рекомендуемые subjects:
 
 - `eventdesign.category.created`
 - `eventdesign.category.updated`
@@ -93,163 +59,44 @@ Subject names должны быть явными и стабильными.
 - `eventdesign.event.deleted`
 - `eventdesign.event.status_changed`
 - `eventdesign.export.requested`
-- `eventdesign.export.started`
 - `eventdesign.export.completed`
 - `eventdesign.export.failed`
 
-Не используй расплывчатые или перегруженные subject names.
+## Идемпотентность
 
-## Ответственность relay
-
-Outbox relay отвечает за:
-
-- выбор unpublished outbox rows;
-- публикацию в JetStream;
-- пометку успешной публикации;
-- сохранение ошибок без потери данных;
-- обработку rows поштучно с `FOR UPDATE SKIP LOCKED`, чтобы retry оставался безопасным;
-- bounded retry behavior;
-- достаточные logging/metrics для диагностики lag и failures.
-
-## Ответственность consumers
-
-### Projection consumer
-
-Потребляет:
-
-- category events;
-- event events.
-
-Обновляет:
-
-- `event_list_projection`
-- `calendar_projection`
-- `dashboard_projection`
-- `report_projection`
-- `recent_activity_projection`
+Для consumer side используется `processed_messages`.
 
 Правила:
 
-- обработка должна быть идемпотентной;
-- дубли не должны создавать duplicate rows или ломать агрегаты;
-- там, где это подходит, предпочтительны UPSERT-паттерны.
+- одно и то же `message_id` не должно применяться повторно;
+- ack происходит только после локального durable commit;
+- duplicate delivery превращается в no-op, а не в повторную мутацию.
 
-### Export consumer
+## Cache side effects
 
-Потребляет:
+В фазе 4 к async backbone привязано только одно серверное cache side effect:
 
-- `export.requested`
+- после обработки category/event событий worker удаляет Redis key dashboard cache.
 
-Выполняет:
+Calendar и reports preview не имеют отдельного backend cache и читаются напрямую из projections.
 
-- claim queued job;
-- перевод job в `processing`;
-- генерацию артефакта на основе projection-backed данных;
-- загрузку артефакта в MinIO;
-- перевод job в `completed` или `failed`;
-- при необходимости эмитит lifecycle events экспорта.
+## Метрики
 
-Правила:
+Минимум, который уже должен быть доступен:
 
-- duplicate work должен быть предотвращён или безопасно переживаться;
-- статусные переходы job должны быть явными и монотонными;
-- активный `processing` job не должен повторно выполняться вторым worker, пока не истёк stale timeout;
-- stale `processing` job должен быть пригоден для controlled retry без ручной правки БД;
-- terminal transition (`completed` или `failed`) должна записывать dedupe marker для `export.requested`;
-- `completed` job обязан соответствовать реальному объекту в storage.
+- lag projection consumer;
+- lag export consumer;
+- export duration;
+- cache hit/miss для dashboard cache.
 
-## processed_messages и дедупликация
+## Ограничение текущей фазы
 
-Для идемпотентных consumers должна использоваться таблица `processed_messages`.
+`request_id` живет на синхронной HTTP -> gRPC цепочке.
 
-Рекомендуемые поля:
+После выхода запроса в async backbone основным коррелятором остаются:
 
-- consumer_name
-- message_id
-- processed_at
+- `outbox_events.id`
+- `processed_messages.message_id`
+- JetStream `message_id`
 
-Правила:
-
-- один consumer не должен дважды применять одно и то же сообщение;
-- duplicate delivery должна превращаться в no-op после durable deduplication check;
-- deduplication по возможности должна жить в той же транзакции, что и mutation projection state.
-
-В EventDesign это означает:
-
-- projection consumer пишет marker в той же транзакции, что и projection update;
-- export consumer пишет marker в той же транзакции, что и terminal update export job.
-
-## Семантика ack
-
-Правильный порядок обработки сообщения:
-
-1. consumer получает сообщение;
-2. открывает локальную транзакцию;
-3. применяет business/projection/export state changes;
-4. записывает processed message или dedupe marker;
-5. коммитит транзакцию;
-6. только после этого делает ack.
-
-Нельзя ack’ать до durable commit.
-Именно так люди получают “всё вроде ок, но данные почему-то пропали”.
-
-## Канонический export flow
-
-1. frontend запрашивает экспорт через Edge API;
-2. Edge API идёт в report service;
-3. report service создаёт `export_jobs` со статусом `queued`;
-4. report service пишет `export.requested` в outbox;
-5. relay публикует событие в JetStream;
-6. export worker потребляет событие;
-7. worker claim’ит job и переводит её в `processing`;
-8. worker строит файл на основе projection-backed read model;
-9. worker загружает объект в MinIO;
-10. worker обновляет метаданные job и переводит её в `completed` или `failed`, одновременно фиксируя dedupe marker;
-11. report service выдаёт secure download access или presigned URL.
-
-## Использование Redis в async flow
-
-Redis допустимо использовать для:
-
-- distributed locks или claim coordination;
-- cache invalidation;
-- hot read caches;
-- rate limit counters.
-
-Redis не должен подменять собой durable source-of-truth storage.
-
-## Метрики, которые желательно иметь
-
-Как минимум нужны или должны быть легко вычисляемы:
-
-- количество unpublished outbox rows;
-- количество ошибок публикации outbox;
-- consumer lag в JetStream;
-- latency обработки projection updates;
-- длительность export jobs;
-- количество duplicate/deduped messages;
-- cache hit/miss, если кэш используется на projection-backed endpoints.
-
-## Типовые failure modes, которые надо предотвратить
-
-Самые опасные сценарии:
-
-- stream не создан на старте;
-- consumer не создан на старте;
-- projector делает ack до DB commit;
-- после redelivery в projections появляются дубли;
-- export redelivery повторно выполняет уже активный `processing` job;
-- export job помечается completed без реальной загрузки объекта;
-- dashboard stale из-за отсутствия cache invalidation;
-- outbox rows никогда не публикуются, потому что relay падает молча.
-
-## Критерий завершённости async backbone
-
-Messaging/backbone считается завершённым только когда:
-
-- command writes создают outbox rows;
-- relay публикует эти rows;
-- consumers обновляют projections идемпотентно;
-- read-side UI отражает обновлённое projection state;
-- export jobs заканчиваются реальными downloadable artifacts;
-- duplicate delivery не повреждает состояние системы.
+Это осознанное ограничение текущего baseline, а не скрытая магия.

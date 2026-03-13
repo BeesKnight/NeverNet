@@ -1,4 +1,4 @@
-import type { ApiResponse, CsrfTokenResponse } from './types'
+import type { ApiErrorResponse, ApiResponse, CsrfTokenResponse } from './types'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api'
 let csrfToken: string | null = null
@@ -6,10 +6,14 @@ let pendingCsrfToken: Promise<string> | null = null
 
 export class ApiError extends Error {
   status: number
+  code?: string
+  requestId?: string | null
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, code?: string, requestId?: string | null) {
     super(message)
     this.status = status
+    this.code = code
+    this.requestId = requestId
   }
 }
 
@@ -77,8 +81,13 @@ export async function apiRequest<T>(
 
   if (!response.ok) {
     const fallback = 'Request failed'
-    const payload = await response.json().catch(() => null)
-    throw new ApiError(payload?.error?.message ?? fallback, response.status)
+    const payload = (await response.json().catch(() => null)) as ApiErrorResponse | null
+    throw new ApiError(
+      payload?.error?.message ?? fallback,
+      response.status,
+      payload?.error?.code,
+      payload?.error?.request_id ?? response.headers.get('x-request-id'),
+    )
   }
 
   const payload = (await response.json()) as ApiResponse<T>
@@ -91,8 +100,13 @@ export async function apiDownload(path: string, fileName: string) {
   })
 
   if (!response.ok) {
-    const payload = await response.json().catch(() => null)
-    throw new ApiError(payload?.error?.message ?? 'Download failed', response.status)
+    const payload = (await response.json().catch(() => null)) as ApiErrorResponse | null
+    throw new ApiError(
+      payload?.error?.message ?? 'Download failed',
+      response.status,
+      payload?.error?.code,
+      payload?.error?.request_id ?? response.headers.get('x-request-id'),
+    )
   }
 
   const blob = await response.blob()

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "typecheck": "tsc -b --pretty false",
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest run"
@@ -33,8 +34,7 @@
     "jsdom": "^26.1.0",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.56.1",
-    "vite": "^8.0.0"
-    ,
+    "vite": "^8.0.0",
     "vitest": "^3.2.4"
   }
 }

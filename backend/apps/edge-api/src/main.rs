@@ -21,7 +21,6 @@ use axum::{
     middleware,
     routing::get,
 };
-use persistence::connect_pool;
 use tokio::net::TcpListener;
 use tower_http::{
     cors::{AllowOrigin, CorsLayer},
@@ -46,13 +45,12 @@ async fn main() -> Result<(), AppError> {
     observability::init_tracing("edge-api", "edge_api=info,tower_http=info");
 
     let config = Arc::new(Config::from_env()?);
-    let pool = connect_pool(&config.database_url, 10).await?;
     let redis = redis::Client::open(config.redis_url.clone())
         .map_err(|error| AppError::Config(format!("Invalid REDIS_URL: {error}")))?;
 
     observability::spawn_metrics_server("edge-api", config.metrics_port);
 
-    let state = AppState::new(pool, redis, config.clone());
+    let state = AppState::new(redis, config.clone());
 
     let origins = config
         .frontend_origins
@@ -105,6 +103,7 @@ async fn main() -> Result<(), AppError> {
         .on_failure(DefaultOnFailure::new().level(Level::ERROR));
 
     let app = Router::new()
+        .route("/healthz", get(health_check))
         .route("/health", get(health_check))
         .nest("/api/auth", auth::router())
         .nest("/api/calendar", calendar::router())

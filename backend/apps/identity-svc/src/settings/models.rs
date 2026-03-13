@@ -1,8 +1,8 @@
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use sqlx::FromRow;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, FromRow)]
 pub struct UiSettings {
     pub user_id: Uuid,
     pub theme: String,
@@ -12,7 +12,7 @@ pub struct UiSettings {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Clone)]
 pub struct UpdateSettingsRequest {
     pub theme: Option<String>,
     pub accent_color: Option<String>,

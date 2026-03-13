@@ -1,6 +1,6 @@
 mod handlers;
 pub mod models;
-mod service;
+pub(crate) mod service;
 
 use axum::{
     Router,

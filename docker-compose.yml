@@ -311,10 +311,6 @@ services:
       args:
         APP_NAME: edge-api
     depends_on:
-      db:
-        condition: service_healthy
-      db-migrator:
-        condition: service_completed_successfully
       redis:
         condition: service_healthy
       identity-svc:
@@ -326,9 +322,7 @@ services:
       report-svc:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgres://eventdesign:eventdesign@db:5432/eventdesign
       REDIS_URL: redis://redis:6379
-      JWT_SECRET: ${JWT_SECRET:-replace-with-a-long-secret}
       PORT: 8080
       METRICS_PORT: 9100
       IDENTITY_SERVICE_URL: http://identity-svc:50051
@@ -348,7 +342,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "curl -fsS http://127.0.0.1:8080/health > /dev/null && curl -fsS http://127.0.0.1:9100/healthz > /dev/null",
+          "curl -fsS http://127.0.0.1:8080/healthz > /dev/null && curl -fsS http://127.0.0.1:9100/healthz > /dev/null",
         ]
       interval: 5s
       timeout: 5s

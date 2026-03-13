@@ -6,8 +6,6 @@ use crate::error::AppError;
 
 #[derive(Debug)]
 pub struct Config {
-    pub database_url: String,
-    pub jwt_secret: String,
     pub redis_url: String,
     pub port: u16,
     pub metrics_port: u16,
@@ -26,8 +24,6 @@ impl Config {
     pub fn from_env() -> Result<Self, AppError> {
         dotenvy::dotenv().ok();
 
-        let database_url = required("DATABASE_URL")?;
-        let jwt_secret = required("JWT_SECRET")?;
         let redis_url =
             env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
         let port = env::var("PORT")
@@ -89,8 +85,6 @@ impl Config {
         }
 
         Ok(Self {
-            database_url,
-            jwt_secret,
             redis_url,
             port,
             metrics_port,
@@ -105,10 +99,6 @@ impl Config {
             auth_rate_limit_requests_per_window,
         })
     }
-}
-
-fn required(key: &str) -> Result<String, AppError> {
-    env::var(key).map_err(|_| AppError::Config(format!("{key} is required")))
 }
 
 fn parse_frontend_origins(origins: &[String]) -> Result<Vec<String>, AppError> {
@@ -199,8 +189,6 @@ mod tests {
     fn rejects_wildcard_origin() {
         with_env(
             &[
-                ("DATABASE_URL", Some("postgres://test")),
-                ("JWT_SECRET", Some("secret")),
                 ("FRONTEND_ORIGINS", Some("*")),
                 ("AUTH_COOKIE_SECURE", None),
             ],
@@ -219,8 +207,6 @@ mod tests {
     fn requires_secure_cookies_for_non_local_origins() {
         with_env(
             &[
-                ("DATABASE_URL", Some("postgres://test")),
-                ("JWT_SECRET", Some("secret")),
                 ("FRONTEND_ORIGINS", Some("https://app.eventdesign.local")),
                 ("AUTH_COOKIE_SECURE", Some("false")),
             ],
@@ -240,8 +226,6 @@ mod tests {
     fn defaults_to_secure_cookies_for_non_local_https_origin() {
         with_env(
             &[
-                ("DATABASE_URL", Some("postgres://test")),
-                ("JWT_SECRET", Some("secret")),
                 ("FRONTEND_ORIGINS", Some("https://app.eventdesign.local")),
                 ("AUTH_COOKIE_SECURE", None),
             ],

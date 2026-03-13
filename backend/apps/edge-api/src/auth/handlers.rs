@@ -55,12 +55,10 @@ pub async fn login(
     ))
 }
 
-pub async fn me(
-    State(state): State<AppState>,
-    current_user: CurrentUser,
-) -> Result<Json<ApiResponse<SessionResponse>>, AppError> {
-    let user = service::get_current_user(&state, &current_user.token).await?;
-    Ok(Json(ApiResponse::new(SessionResponse { user })))
+pub async fn me(current_user: CurrentUser) -> Result<Json<ApiResponse<SessionResponse>>, AppError> {
+    Ok(Json(ApiResponse::new(SessionResponse {
+        user: current_user.user,
+    })))
 }
 
 pub async fn csrf(

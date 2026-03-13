@@ -5,6 +5,8 @@ use axum::{
 };
 use serde::Serialize;
 
+use crate::shared::request_context;
+
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
     #[error("{0}")]
@@ -22,10 +24,6 @@ pub enum AppError {
     #[error("{0}")]
     Internal(String),
     #[error(transparent)]
-    Database(#[from] sqlx::Error),
-    #[error(transparent)]
-    Migration(#[from] sqlx::migrate::MigrateError),
-    #[error(transparent)]
     Io(#[from] std::io::Error),
 }
 
@@ -36,7 +34,9 @@ struct ErrorBody {
 
 #[derive(Serialize)]
 struct ErrorMessage {
+    code: &'static str,
     message: String,
+    request_id: Option<String>,
 }
 
 impl IntoResponse for AppError {
@@ -48,18 +48,27 @@ impl IntoResponse for AppError {
             AppError::Conflict(_) => StatusCode::CONFLICT,
             AppError::RateLimited(_) => StatusCode::TOO_MANY_REQUESTS,
             AppError::Config(_) | AppError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
-            AppError::Database(_) | AppError::Migration(_) | AppError::Io(_) => {
-                StatusCode::INTERNAL_SERVER_ERROR
-            }
+            AppError::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
 
-        if matches!(self, AppError::Database(_) | AppError::Migration(_)) {
-            tracing::error!("database error: {}", self);
+        if matches!(
+            self,
+            AppError::Config(_) | AppError::Internal(_) | AppError::Io(_)
+        ) {
+            tracing::error!(
+                request_id = request_context::current_request_id()
+                    .as_deref()
+                    .unwrap_or("missing"),
+                "edge-api error: {}",
+                self
+            );
         }
 
         let body = ErrorBody {
             error: ErrorMessage {
+                code: error_code(&self),
                 message: self.to_string(),
+                request_id: request_context::current_request_id(),
             },
         };
 
@@ -70,5 +79,17 @@ impl IntoResponse for AppError {
 impl From<axum::http::Error> for AppError {
     fn from(error: axum::http::Error) -> Self {
         AppError::Internal(error.to_string())
+    }
+}
+
+fn error_code(error: &AppError) -> &'static str {
+    match error {
+        AppError::BadRequest(_) => "bad_request",
+        AppError::Unauthorized(_) => "unauthorized",
+        AppError::NotFound(_) => "not_found",
+        AppError::Conflict(_) => "conflict",
+        AppError::RateLimited(_) => "rate_limited",
+        AppError::Config(_) => "config_error",
+        AppError::Internal(_) | AppError::Io(_) => "internal_error",
     }
 }

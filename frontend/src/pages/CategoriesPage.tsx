@@ -3,6 +3,7 @@ import { format } from 'date-fns'
 import { useState } from 'react'
 
 import { apiRequest } from '../api/client'
+import { invalidateReadSideQueries } from '../api/query-utils'
 import { ErrorState, LoadingState } from '../components/QueryState'
 import type { Category } from '../api/types'
 import { CategoryForm } from '../features/categories/CategoryForm'
@@ -35,7 +36,7 @@ export function CategoriesPage() {
     },
     onSuccess: async () => {
       setEditingCategory(null)
-      await queryClient.invalidateQueries({ queryKey: ['categories'] })
+      await invalidateReadSideQueries(queryClient)
     },
   })
 
@@ -45,7 +46,7 @@ export function CategoriesPage() {
         method: 'DELETE',
       }),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['categories'] })
+      await invalidateReadSideQueries(queryClient)
     },
   })
 

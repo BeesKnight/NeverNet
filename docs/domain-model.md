@@ -1,335 +1,154 @@
 # Доменная модель EventDesign
 
-## Краткое описание продукта
-
-EventDesign — система для планирования мероприятий и управления событиями.
-
-Пользователь управляет своими категориями и событиями, может фильтровать и сортировать списки, смотреть календарь, видеть dashboard summary, строить отчёты и экспортировать их в PDF/XLSX.
-
 ## Bounded contexts
 
 ### Identity
 
 Отвечает за:
 
-- users;
-- sessions;
-- authentication;
-- authorization context.
+- `users`
+- `sessions`
+- `ui_settings`
+- browser auth контекст
 
 ### Event Management
 
 Отвечает за:
 
-- categories;
-- events;
-- event lifecycle;
-- ownership;
-- write-side business validation.
+- `categories`
+- `events`
+- ownership
+- lifecycle и business validation write-side
 
-### Reporting And Exports
-
-Отвечает за:
-
-- report previews;
-- aggregates;
-- export jobs;
-- generated artifacts;
-- download authorization.
-
-### Preferences
+### Reporting and Exports
 
 Отвечает за:
 
-- UI theme;
-- accent color;
-- default view / default page;
-- другие user-scoped interface settings.
+- preview агрегаты по projections
+- `export_jobs`
+- downloadable artifacts
 
 ## Основные сущности
 
 ### User
 
-Поля:
-
-- id
-- email
-- password_hash
-- full_name
-- created_at
-- updated_at
-
-Правила:
-
-- email должен быть уникальным;
-- пароль никогда не хранится в открытом виде;
-- пользователь владеет категориями, событиями, сессиями, UI settings и export jobs.
+- `id`
+- `email`
+- `password_hash`
+- `full_name`
+- `created_at`
+- `updated_at`
 
 ### Session
 
-Поля:
+- `id`
+- `user_id`
+- `created_at`
+- `expires_at`
+- `revoked_at`
 
-- id
-- user_id
-- created_at
-- expires_at
-- revoked_at
-- user_agent
-- ip_address
+Инварианты:
 
-Правила:
-
-- сессия принадлежит одному пользователю;
-- сессия бывает активной или отозванной;
-- browser auth cookie представляет session-bound identity;
-- browser auth не использует bearer token в `localStorage` или `Authorization` header;
-- session cookie должна быть `HttpOnly`, а для non-local origin также `Secure`;
-- session и CSRF cookie используют явную `SameSite` policy;
-- logout и принудительная инвалидизация должны отзывать session row.
-
-### Category
-
-Поля:
-
-- id
-- user_id
-- name
-- color
-- created_at
-- updated_at
-
-Правила:
-
-- категории user-scoped;
-- ограничения имени могут быть глобальными по пользователю, если продукт это предполагает;
-- ownership должен проверяться всегда;
-- удаление категории, которая ещё используется событиями, должно быть явно запрещено или корректно обработано.
-
-### Event
-
-Поля:
-
-- id
-- user_id
-- category_id
-- title
-- description
-- location
-- starts_at
-- ends_at
-- budget
-- status
-- created_at
-- updated_at
-
-Правила:
-
-- событие принадлежит одному пользователю;
-- событие принадлежит одной категории того же пользователя;
-- `starts_at` должен быть раньше `ends_at`;
-- status должен быть одним из допустимых значений;
-- ownership должен проверяться всегда;
-- write-side изменения обязаны генерировать domain events.
+- session принадлежит одному user;
+- revoked или expired session не должна проходить в `edge-api`;
+- проверка session выполняется через `identity-svc`.
 
 ### UI Settings
 
-Поля:
+- `user_id`
+- `theme`
+- `accent_color`
+- `default_view`
+- `created_at`
+- `updated_at`
 
-- user_id
-- theme
-- accent_color
-- default_view
-- created_at
-- updated_at
+Инварианты:
 
-Правила:
-
-- на пользователя должна существовать одна запись настроек;
+- одна запись на пользователя;
 - настройки user-scoped;
-- если строки нет, должны безопасно применяться значения по умолчанию.
+- владельцем `ui_settings` считается `identity-svc`, а не `edge-api`.
+
+### Category
+
+- `id`
+- `user_id`
+- `name`
+- `color`
+- `created_at`
+- `updated_at`
+
+Инварианты:
+
+- category user-scoped;
+- нельзя мутировать category другого пользователя;
+- удаление запрещено, если category все еще используется event-ами.
+
+### Event
+
+- `id`
+- `user_id`
+- `category_id`
+- `title`
+- `description`
+- `location`
+- `starts_at`
+- `ends_at`
+- `budget`
+- `status`
+- `created_at`
+- `updated_at`
+
+Инварианты:
+
+- event принадлежит одному пользователю;
+- `category_id` обязан ссылаться на category того же пользователя;
+- `starts_at < ends_at`;
+- допустимые статусы: `planned`, `in_progress`, `completed`, `cancelled`;
+- write-side mutation обязана создавать outbox event.
 
 ### Export Job
 
-Поля:
+- `id`
+- `user_id`
+- `report_type`
+- `format`
+- `status`
+- `filters`
+- `object_key`
+- `content_type`
+- `error_message`
+- `created_at`
+- `started_at`
+- `updated_at`
+- `finished_at`
 
-- id
-- user_id
-- report_type
-- format
-- status
-- filters_json
-- object_key
-- content_type
-- size_bytes (опционально, если метаданные размера сохраняются отдельно)
-- error_message
-- created_at
-- started_at
-- updated_at
-- finished_at
+Инварианты:
 
-Правила:
+- export job user-scoped;
+- `completed` допустим только при наличии реального объекта в MinIO;
+- скачивание обязано проверять ownership.
 
-- export job принадлежит одному пользователю;
-- файловая метаинформация не должна зависеть от локального пути внутри контейнера;
-- как минимум должны поддерживаться статусы `queued`, `processing`, `completed`, `failed`;
-- `completed` допустим только после успешной загрузки файла в MinIO/S3-compatible storage и заполнения `object_key` / `content_type`;
-- completed-job обязан указывать на реальный объект в MinIO/S3-compatible storage;
-- скачивание должно проверять ownership.
+## Projection-backed read model
 
-## Допустимые статусы события
+В read-side используются:
 
-Минимальный набор:
+- `event_list_projection`
+- `calendar_projection`
+- `dashboard_projection`
+- `report_projection`
+- `recent_activity_projection`
 
-- planned
-- in_progress
-- completed
-- cancelled
+Dashboard дополнительно может кэшироваться в Redis.
 
-Рекомендуемая политика переходов:
+Calendar и report preview в фазе 4 backend-кэшем не прикрываются.
 
-- planned -> in_progress
-- planned -> cancelled
-- in_progress -> completed
-- in_progress -> cancelled
+## Архитектурная граница
 
-Если код позволяет больше переходов, это должно быть явно задокументировано и сделано осознанно.
+`edge-api` не считается владельцем ни одной доменной сущности.
 
-## Основные пользовательские возможности
+Его роль:
 
-Пользователь должен уметь:
-
-- регистрироваться и входить;
-- выходить, теряя активную сессию;
-- управлять категориями;
-- создавать и редактировать события;
-- фильтровать и сортировать списки событий;
-- смотреть календарь;
-- видеть dashboard summaries;
-- строить отчёты по периоду и категориям;
-- экспортировать отчёты в PDF и XLSX;
-- менять настройки интерфейса.
-
-## Projection-backed read models
-
-### event_list_projection
-
-Назначение:
-
-- страница списка событий;
-- UI для сортировки и фильтрации.
-
-Ожидаемые поля:
-
-- event_id
-- user_id
-- category_id
-- category_name
-- category_color
-- title
-- description
-- location
-- starts_at
-- ends_at
-- budget
-- status
-- created_at
-- updated_at
-
-### calendar_projection
-
-Назначение:
-
-- отображение календаря по датам / месяцам.
-
-Ожидаемые поля:
-
-- event_id
-- user_id
-- date_bucket
-- title
-- starts_at
-- ends_at
-- status
-- category_color
-- updated_at
-
-### dashboard_projection
-
-Назначение:
-
-- summary cards и dashboard widgets.
-
-Ожидаемые поля:
-
-- user_id
-- total_events
-- upcoming_events
-- completed_events
-- cancelled_events
-- total_budget
-- updated_at
-
-### report_projection
-
-Назначение:
-
-- предпросмотр отчётов и база для export-запросов.
-
-Ожидаемые поля:
-
-- event_id
-- user_id
-- category_id
-- category_name
-- category_color
-- title
-- description
-- location
-- starts_at
-- ends_at
-- budget
-- status
-- created_at
-- updated_at
-
-### recent_activity_projection
-
-Назначение:
-
-- recent activity feed;
-- audit-flavored UX, если реализовано.
-
-Ожидаемые поля:
-
-- id
-- source_message_id
-- user_id
-- entity_type
-- entity_id
-- action
-- title
-- occurred_at
-- created_at
-
-## Инварианты, которые должны соблюдаться
-
-Во всей системе должно оставаться истинным следующее:
-
-- пользователь A не может читать или изменять категории пользователя B;
-- пользователь A не может читать или изменять события пользователя B;
-- пользователь A не может скачивать или смотреть export jobs пользователя B;
-- событие не может ссылаться на категорию другого пользователя;
-- projection rows должны eventually отражать authoritative write-side state;
-- повторная доставка одного и того же события не должна портить projections;
-- completed export job должен соответствовать реально скачиваемому артефакту.
-
-## Зоны риска доменной модели
-
-Доменная модель быстро деградирует, если:
-
-- Edge API обходит внутренние сервисы и ходит в DB напрямую;
-- projection updates неидемпотентны;
-- export jobs двигаются по статусам без durable state transitions;
-- DTO наружу отдают внутренние поля, которые не нужны фронтенду.
-
-Это не абстрактные страшилки. Эти места надо проверять кодом и чинить там, где они есть.
+- принять browser request;
+- аутентифицировать пользователя;
+- вызвать правильный внутренний сервис;
+- вернуть frontend-shaped ответ.
