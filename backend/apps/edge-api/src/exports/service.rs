@@ -93,7 +93,7 @@ pub async fn download(
         .map_err(map_status)?
         .into_inner();
 
-    Ok(Response::builder()
+    Response::builder()
         .status(StatusCode::OK)
         .header(
             CONTENT_TYPE,
@@ -106,7 +106,7 @@ pub async fn download(
                 .map_err(|error| AppError::Internal(error.to_string()))?,
         )
         .body(Body::from(reply.bytes))
-        .map_err(AppError::from)?)
+        .map_err(AppError::from)
 }
 
 async fn report_client(

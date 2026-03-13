@@ -263,14 +263,17 @@ fn map_export_job(job: ExportJob) -> GrpcExportJob {
     }
 }
 
+#[allow(clippy::result_large_err)]
 fn parse_uuid(value: &str, field: &str) -> Result<Uuid, Status> {
     Uuid::parse_str(value).map_err(|_| Status::invalid_argument(format!("Invalid {field}")))
 }
 
+#[allow(clippy::result_large_err)]
 fn parse_filters_json(value: &str) -> Result<serde_json::Value, Status> {
     serde_json::from_str(value).map_err(|_| Status::invalid_argument("Invalid filters_json"))
 }
 
+#[allow(clippy::result_large_err)]
 fn validate_report_type(value: &str) -> Result<(), Status> {
     if value == "summary" {
         Ok(())
@@ -279,6 +282,7 @@ fn validate_report_type(value: &str) -> Result<(), Status> {
     }
 }
 
+#[allow(clippy::result_large_err)]
 fn validate_format(value: &str) -> Result<(), Status> {
     if matches!(value, "pdf" | "xlsx") {
         Ok(())

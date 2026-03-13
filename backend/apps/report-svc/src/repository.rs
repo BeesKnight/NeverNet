@@ -117,3 +117,47 @@ pub async fn get_export_job(
     .fetch_optional(pool)
     .await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn insert_user(pool: &PgPool, email: &str) -> Uuid {
+        let user_id = Uuid::new_v4();
+        sqlx::query(
+            r#"
+            INSERT INTO users (id, email, password_hash, full_name)
+            VALUES ($1, $2, 'hash', 'Report User')
+            "#,
+        )
+        .bind(user_id)
+        .bind(email)
+        .execute(pool)
+        .await
+        .expect("user insert should succeed");
+
+        user_id
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn get_export_job_is_scoped_to_owner(pool: PgPool) {
+        let owner_id = insert_user(&pool, "owner@eventdesign.local").await;
+        let other_user_id = insert_user(&pool, "other@eventdesign.local").await;
+        let mut tx = pool.begin().await.expect("transaction should start");
+
+        let job = create_export_job(&mut tx, owner_id, "summary", "pdf", serde_json::json!({}))
+            .await
+            .expect("export job should be created");
+        tx.commit().await.expect("transaction should commit");
+
+        let owner_job = get_export_job(&pool, owner_id, job.id)
+            .await
+            .expect("owner lookup should succeed");
+        let foreign_job = get_export_job(&pool, other_user_id, job.id)
+            .await
+            .expect("foreign lookup should succeed");
+
+        assert!(owner_job.is_some());
+        assert!(foreign_job.is_none());
+    }
+}

@@ -2,13 +2,15 @@
 
 EventDesign — дипломный full-stack проект для планирования мероприятий, аналитики и асинхронного экспорта отчётов.
 
-Текущее состояние репозитория соответствует фазе 1:
+Текущее состояние репозитория соответствует завершённым фазам 1-3:
 
 - стек поднимается одной командой `docker compose up --build -d`;
 - миграции применяются отдельным one-shot сервисом `db-migrator`;
 - bootstrap MinIO и NATS JetStream выполняется отдельным one-shot сервисом `infra-bootstrap`;
 - прикладные сервисы стартуют только после healthy infra и успешного завершения bootstrap-этапов;
-- фронтенд работает только через `edge-api`.
+- write-side изменения проходят через outbox и JetStream backbone;
+- browser auth работает через `HttpOnly` cookie, `credentials: include` и CSRF;
+- completed export jobs действительно скачиваются через `edge-api`.
 
 ## Состав стека
 
@@ -139,6 +141,14 @@ npm run dev
 
 Vite dev server проксирует `/api` в `VITE_EDGE_API_ORIGIN`, поэтому браузерный auth flow остаётся cookie-based.
 
+## Browser auth и export
+
+- браузер не использует bearer tokens и не хранит auth token в `localStorage`;
+- state-changing запросы требуют CSRF token из `GET /api/auth/csrf`;
+- `FRONTEND_ORIGINS` должен быть явным allowlist без `*`;
+- для non-local origin нужно включать `AUTH_COOKIE_SECURE=true`;
+- скачивание экспортов идёт через `GET /api/exports/:id/download` и требует ownership check.
+
 ## Полезные проверки
 
 Backend:
@@ -169,6 +179,8 @@ docker compose logs --no-color
 
 - observability-стек поднят, но часть scrape/provisioning-настроек ещё требует доводки в следующих фазах;
 - smoke script ещё не добавлен в репозиторий;
-- auth/security-hardening, полный async backbone и финальная полировка export flow остаются задачами следующих фаз.
+- часть сервисных границ и observability-доводка остаются задачами следующих фаз;
+- нет полного smoke/CI-прогона уровня финальной защиты;
+- export processing lease по-прежнему основан на timeout, а не на heartbeat-механике.
 
 Подробности по архитектуре и этапам доведения: [docs/architecture.md](/docs/architecture.md), [docs/delivery-plan.md](/docs/delivery-plan.md), [docs/runbook.md](/docs/runbook.md).

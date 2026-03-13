@@ -11,8 +11,8 @@ use crate::{
     shared::{
         api::ApiResponse,
         auth::{
-            CurrentUser, build_auth_cookie, build_csrf_cookie, build_removal_cookie,
-            generate_csrf_token,
+            CurrentUser, build_auth_cookie, build_csrf_cookie, build_csrf_removal_cookie,
+            build_removal_cookie, generate_csrf_token,
         },
     },
 };
@@ -90,6 +90,8 @@ pub async fn logout(
         service::logout(&state, &current_user.token).await?;
     }
 
-    let jar = jar.remove(build_removal_cookie(state.config.auth_cookie_secure));
+    let jar = jar
+        .remove(build_removal_cookie(state.config.auth_cookie_secure))
+        .remove(build_csrf_removal_cookie(state.config.auth_cookie_secure));
     Ok((jar, Json(ApiResponse::new("logged_out"))))
 }

@@ -417,6 +417,7 @@ fn snapshot_event_payload(event: &EventRecord) -> EventPayload {
     }
 }
 
+#[allow(clippy::result_large_err)]
 fn build_event_mutation<'a, T>(request: &'a T) -> Result<EventMutation<'a>, Status>
 where
     T: EventMutationRequest,
@@ -540,10 +541,12 @@ fn map_event(event: EventRecord) -> GrpcEventRecord {
     }
 }
 
+#[allow(clippy::result_large_err)]
 fn parse_uuid(value: &str, field: &str) -> Result<Uuid, Status> {
     Uuid::parse_str(value).map_err(|_| Status::invalid_argument(format!("Invalid {field}")))
 }
 
+#[allow(clippy::result_large_err)]
 fn parse_datetime(value: &str, field: &str) -> Result<DateTime<Utc>, Status> {
     DateTime::parse_from_rfc3339(value)
         .map(|timestamp| timestamp.with_timezone(&Utc))

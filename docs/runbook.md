@@ -2,7 +2,7 @@
 
 ## Назначение
 
-Этот документ фиксирует рабочий порядок запуска EventDesign в фазе 1 и команды для базовой диагностики.
+Этот документ фиксирует рабочий порядок запуска EventDesign после фаз 1-3 и команды для базовой диагностики.
 
 Цель runbook:
 
@@ -121,6 +121,21 @@ curl "http://localhost:8222/jsz?streams=true&consumers=true"
 
 Если один из шагов нестабилен, проект нельзя считать demo-ready.
 
+## Проверка browser auth и CSRF
+
+Минимальный инвариант:
+
+- фронтенд работает только через cookie-based session;
+- все `POST` / `PATCH` / `DELETE` идут с `credentials: include`;
+- state-changing запросы отправляют `X-CSRF-Token`, полученный из `GET /api/auth/csrf`;
+- logout очищает `eventdesign_session` и `eventdesign_csrf`.
+
+Если используется non-local origin, проверить:
+
+- origin явно указан в `FRONTEND_ORIGINS`;
+- `FRONTEND_ORIGINS` не содержит `*`;
+- `AUTH_COOKIE_SECURE=true`.
+
 ## Локальная разработка по частям
 
 Если нужен запуск без полного compose для приложений:
@@ -184,6 +199,25 @@ npm run dev
 - существует ли bucket `eventdesign-exports`;
 - доступен ли MinIO по `http://localhost:9000/minio/health/live`;
 - нет ли ошибок загрузки артефактов в логах `worker` и `report-svc`.
+
+### Проблема: browser login/logout работает нестабильно
+
+Проверить:
+
+- что фронтенд действительно вызывает `GET /api/auth/csrf` перед первым state-changing запросом;
+- что браузер отправляет `credentials: include`;
+- что `FRONTEND_ORIGINS` не содержит wildcard и соответствует реальному origin фронтенда;
+- что для non-local origin включён `AUTH_COOKIE_SECURE=true`;
+- что после logout в таблице `sessions` у текущей строки появился `revoked_at`.
+
+### Проблема: completed export не скачивается
+
+Проверить:
+
+- что строка в `export_jobs` для нужного `id` имеет `status = 'completed'`;
+- что у неё заполнены `object_key` и `content_type`;
+- что объект реально существует в bucket `eventdesign-exports`;
+- что в логах `worker` нет ошибок загрузки в MinIO, а в логах `report-svc` нет ошибок чтения объекта.
 
 ### Проблема: события не доходят до read-side
 

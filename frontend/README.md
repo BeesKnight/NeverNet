@@ -25,6 +25,12 @@ VITE_EDGE_API_ORIGIN=http://localhost:8080
 `VITE_API_BASE_URL=/api` нужен для Vite proxy и nginx runtime-конфига.
 Браузерный клиент не должен обращаться к внутренним сервисам напрямую.
 
+Для browser auth flow фронтенд ожидает:
+
+- cookie-based сессию через `credentials: include`;
+- CSRF token из `GET /api/auth/csrf` для всех `POST` / `PATCH` / `DELETE`;
+- отсутствие bearer token в `localStorage` и в `Authorization` header.
+
 ## Локальный запуск
 
 Для полноценного локального запуска backend сначала нужно подготовить инфраструктуру и bootstrap-этапы:
@@ -54,3 +60,5 @@ npm run dev
 ```
 
 Vite dev server проксирует `/api` на `VITE_EDGE_API_ORIGIN`, поэтому cookie-based auth flow работает без хранения токенов в `localStorage`.
+
+Если фронтенд запускается не локально, `edge-api` должен видеть этот origin в `FRONTEND_ORIGINS`, а auth cookie должна работать с `AUTH_COOKIE_SECURE=true`.

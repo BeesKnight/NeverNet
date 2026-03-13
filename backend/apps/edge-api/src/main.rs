@@ -74,7 +74,6 @@ async fn main() -> Result<(), AppError> {
             Method::OPTIONS,
         ])
         .allow_headers([
-            header::AUTHORIZATION,
             header::CONTENT_TYPE,
             header::ACCEPT,
             header::HeaderName::from_static("x-csrf-token"),

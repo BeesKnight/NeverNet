@@ -15,12 +15,16 @@
 
 - браузерная авторизация cookie-based;
 - auth cookie называется `eventdesign_session`;
+- auth cookie выставляется как `HttpOnly`;
+- auth и CSRF cookie используют `SameSite=Lax`;
+- для non-local origin auth cookie должна работать с `Secure`;
 - браузер должен отправлять `credentials: include`;
 - state-changing запросы должны отправлять CSRF token в `X-CSRF-Token`;
 - допустимые frontend origins задаются явным allowlist, например `FRONTEND_ORIGINS`;
+- `FRONTEND_ORIGINS` не должен содержать wildcard `*`;
 - ответы по возможности содержат `x-request-id` или аналогичный correlation id.
 
-В нормальном browser flow нельзя использовать `localStorage` bearer tokens.
+В нормальном browser flow нельзя использовать `localStorage` bearer tokens или `Authorization: Bearer ...` на внешнем API.
 
 ## Общий формат ответов и ошибок
 
@@ -54,7 +58,7 @@
 - `400` ошибка валидации или плохой запрос
 - `401` неаутентифицированный пользователь или ошибка CSRF
 - `403` недостаточно прав / ownership failure
-- `404` ресурс не найден
+- `404` ресурс не найден; для foreign object-by-id может использоваться тот же код, чтобы не раскрывать существование чужого объекта
 - `409` конфликт
 - `429` rate limited
 - `500` внутренняя ошибка сервера
@@ -74,6 +78,10 @@
 1. браузер вызывает endpoint перед login/register или перед первым state-changing запросом;
 2. token затем отправляется в `X-CSRF-Token`.
 
+Требования:
+- endpoint доступен без активной сессии;
+- браузер использует тот же origin и `credentials: include`.
+
 #### POST `/api/auth/register`
 
 Назначение:
@@ -86,6 +94,7 @@
 - валидный CSRF token;
 - email uniqueness;
 - password hashing;
+- session cookie должна быть `HttpOnly`;
 - возврат текущего пользователя в `data`.
 
 #### POST `/api/auth/login`
@@ -99,6 +108,7 @@
 Требования:
 - валидный CSRF token;
 - ownership или role checks здесь не нужны, но нужна строгая проверка credentials;
+- session cookie должна быть `HttpOnly`;
 - в ответе должен быть current user.
 
 #### POST `/api/auth/logout`
@@ -106,7 +116,8 @@
 Назначение:
 
 - отозвать текущую сессию;
-- очистить auth cookie.
+- очистить auth cookie;
+- очистить CSRF cookie.
 
 Требования:
 - валидный CSRF token;
@@ -294,18 +305,19 @@
 
 Требования:
 - ownership check;
-- completed job должен содержать информацию, достаточную для скачивания.
+- completed job должен содержать информацию, достаточную для скачивания, включая `object_key` и `content_type`.
 
-#### POST `/api/exports/:id/download` или GET `/api/exports/:id/download`
+#### GET `/api/exports/:id/download`
 
 Назначение:
 
-- инициировать безопасную выдачу presigned URL или прямой проксируемый download.
+- инициировать безопасный проксируемый download через `edge-api`.
 
 Требования:
 - ownership check;
 - completed status;
 - object должен реально существовать в MinIO;
+- completed job не должен считаться валидным для скачивания без `object_key` и `content_type`;
 - нельзя отдавать чужие артефакты.
 
 ### Settings
@@ -329,6 +341,7 @@
 
 - authentication;
 - ownership check;
+- отсутствие browser bearer auth;
 - предсказуемый JSON response shape;
 - request correlation id;
 - внятные ошибки для фронтенда.
