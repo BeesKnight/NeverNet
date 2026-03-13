@@ -19,13 +19,20 @@ pub async fn create(
     payload: CreateCategoryRequest,
 ) -> Result<Category, AppError> {
     validation::validate_category(&payload.name, &payload.color)?;
-    Ok(repository::create(
+    repository::create(
         &state.pool,
         user_id,
         payload.name.trim(),
         payload.color.trim(),
     )
-    .await?)
+    .await
+    .map_err(|error| {
+        if crate::error::is_constraint(&error, "categories_user_name_unique") {
+            AppError::Conflict("Category name is already in use".to_string())
+        } else {
+            AppError::from(error)
+        }
+    })
 }
 
 pub async fn update(
@@ -42,7 +49,14 @@ pub async fn update(
         payload.name.trim(),
         payload.color.trim(),
     )
-    .await?
+    .await
+    .map_err(|error| {
+        if crate::error::is_constraint(&error, "categories_user_name_unique") {
+            AppError::Conflict("Category name is already in use".to_string())
+        } else {
+            AppError::from(error)
+        }
+    })?
     .ok_or_else(|| AppError::NotFound("Category not found".to_string()))
 }
 

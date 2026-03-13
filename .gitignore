@@ -8,3 +8,4 @@ backend/storage/exports/
 *.tsbuildinfo
 */target/
 target/
+.env

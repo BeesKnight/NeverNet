@@ -1,5 +1,6 @@
 mod app_state;
 mod auth;
+mod calendar;
 mod categories;
 mod config;
 mod error;
@@ -52,6 +53,7 @@ async fn main() -> Result<(), AppError> {
     let app = Router::new()
         .route("/health", get(health_check))
         .nest("/api/auth", auth::router())
+        .nest("/api/calendar", calendar::router())
         .nest("/api/categories", categories::router())
         .nest("/api/events", events::router())
         .nest("/api/reports", reports::router())

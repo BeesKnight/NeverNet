@@ -7,18 +7,18 @@ import { useAuth } from '../features/auth/auth-context'
 export function LoginPage() {
   const navigate = useNavigate()
   const auth = useAuth()
-  const [email, setEmail] = useState('demo@eventdesign.local')
-  const [password, setPassword] = useState('password123')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   return (
     <div className="auth-shell">
       <section className="auth-panel">
-        <p className="eyebrow">EventDesign</p>
-        <h1>Run planning, reporting, and exports from one workspace.</h1>
+        <p className="eyebrow">NeverNet</p>
+        <h1>Run event planning, reporting, and exports from one workspace.</h1>
         <p className="panel-copy">
-          Sign in to manage categories, track event execution, and export reports.
+          Sign in to manage categories, track execution status, inspect the calendar, and export reports.
         </p>
       </section>
 
@@ -39,7 +39,7 @@ export function LoginPage() {
 
             try {
               await auth.login({ email, password })
-              navigate('/dashboard')
+              navigate('/')
             } catch (submissionError) {
               setError(
                 submissionError instanceof ApiError
@@ -53,7 +53,12 @@ export function LoginPage() {
         >
           <label>
             <span>Email</span>
-            <input value={email} onChange={(event) => setEmail(event.target.value)} required />
+            <input
+              type="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              required
+            />
           </label>
 
           <label>

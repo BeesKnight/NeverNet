@@ -1,30 +1,70 @@
-# EventDesign
+# NeverNet
 
-EventDesign is a full-stack graduation project for event planning and event management. It covers:
+NeverNet is a full-stack graduation project for event planning and event management. It is implemented as a practical modular monolith with a React frontend, a Rust backend, PostgreSQL persistence, asynchronous report exports, and a calendar view.
 
-- registration and authentication
-- category management
-- event CRUD
-- filtering and search
-- reports by period and category
-- PDF and XLSX export jobs
-- persisted UI theme settings
-- calendar view
+## Implemented scope
 
-The implementation is a practical modular monolith: one React frontend and one Rust backend backed by PostgreSQL.
+- registration, login, logout, password hashing, and protected API routes
+- per-user category management with ownership checks
+- full event CRUD with validation, filtering, and text search
+- dashboard summaries for total, upcoming, completed, and cancelled events
+- reports by date range and category with event-level detail
+- PDF and XLSX export jobs with asynchronous processing
+- persisted UI preferences: theme, accent color, and default start page
+- monthly calendar view for event inspection
 
-## Repository Layout
+## Repository layout
 
 - `frontend/` React + TypeScript + Vite
 - `backend/` Rust + Axum + SQLx
-- `docs/` project documentation
+- `docs/` architecture and project notes
 
-## Stack
+## Docker Compose quick start
 
-- Frontend: React, TypeScript, Vite, React Router, TanStack Query
-- Backend: Rust, Axum, SQLx, PostgreSQL
+Run the full stack with one command:
 
-## Local Run
+```bash
+docker compose up --build
+```
+
+Services started by Compose:
+
+- `frontend` on `http://localhost:3000`
+- `backend` on `http://localhost:8080`
+- `postgres` on the internal Compose network
+
+Compose already wires:
+
+- PostgreSQL persistence
+- backend migrations on startup
+- frontend reverse proxy to `/api`
+- persistent export storage via a Docker volume
+
+To stop and remove containers:
+
+```bash
+docker compose down
+```
+
+To also remove the database and export volumes:
+
+```bash
+docker compose down -v
+```
+
+If you want a non-demo JWT secret, export `JWT_SECRET` before starting Compose.
+
+## Build optimization
+
+Container builds are optimized for repeat runs:
+
+- backend Dockerfile reuses Cargo dependency layers before source copy
+- BuildKit cache mounts are enabled for Cargo registry/git/target data
+- frontend Dockerfile caches the npm package store and isolates dependency install
+- both services use service-specific `.dockerignore` files to keep build context small
+- frontend ships as static assets behind nginx, so the runtime image stays small
+
+## Local setup without Docker
 
 ### 1. Start PostgreSQL
 
@@ -32,7 +72,7 @@ The implementation is a practical modular monolith: one React frontend and one R
 docker compose up -d db
 ```
 
-### 2. Configure environment files
+### 2. Create environment files
 
 Backend:
 
@@ -46,18 +86,18 @@ Frontend:
 copy frontend\.env.example frontend\.env
 ```
 
-Update `backend/.env` and set a real `JWT_SECRET` before regular use.
+`backend/.env` uses the local Docker database by default. Replace `JWT_SECRET` before non-demo use.
 
-### 3. Start the backend
+### 3. Run the backend
 
 ```bash
 cd backend
 cargo run
 ```
 
-The backend runs on `http://localhost:8080` and applies SQL migrations automatically on startup.
+The backend runs on `http://localhost:8080` and applies migrations automatically.
 
-### 4. Start the frontend
+### 4. Run the frontend
 
 ```bash
 cd frontend
@@ -67,22 +107,46 @@ npm run dev
 
 The frontend runs on `http://localhost:5173`.
 
-## Useful Endpoints
+## API endpoints
 
-- `GET /health`
+Auth:
+
 - `POST /api/auth/register`
 - `POST /api/auth/login`
+- `POST /api/auth/logout`
 - `GET /api/auth/me`
-- `GET|POST /api/categories/`
-- `PUT|DELETE /api/categories/:id`
-- `GET|POST /api/events/`
-- `GET|PUT|DELETE /api/events/:id`
-- `GET /api/reports/summary`
-- `GET|PUT /api/settings/`
-- `GET|POST /api/exports/`
-- `GET /api/exports/:id/download`
 
-## Checks
+Categories:
+
+- `GET /api/categories`
+- `POST /api/categories`
+- `PATCH /api/categories/{id}`
+- `DELETE /api/categories/{id}`
+
+Events:
+
+- `GET /api/events`
+- `GET /api/events/{id}`
+- `POST /api/events`
+- `PATCH /api/events/{id}`
+- `DELETE /api/events/{id}`
+
+Reports and exports:
+
+- `GET /api/reports/summary`
+- `GET /api/reports/by-category`
+- `GET /api/calendar`
+- `GET /api/exports`
+- `GET /api/exports/{id}`
+- `POST /api/exports`
+- `GET /api/exports/{id}/download`
+
+Settings:
+
+- `GET /api/settings`
+- `PATCH /api/settings`
+
+## Quality checks
 
 Backend:
 
@@ -103,11 +167,15 @@ npm run build
 
 ## Notes
 
-- Export files are written to `backend/storage/exports/`.
-- Export processing is asynchronous but runs inside the backend process to keep local setup simple.
-- Category deletion is blocked when events still reference that category.
-- Theme preferences are persisted per user in `ui_settings`.
+- export files are written to `backend/storage/exports/`
+- export jobs are asynchronous but intentionally stay inside the backend process to keep local setup simple
+- category deletion is blocked while events still reference that category
+- no demo seed is included; use the registration flow to create the first user
 
-## Architecture
+## Known limitations
 
-See [docs/architecture.md](/docs/architecture.md).
+- export processing is in-process, not a separate worker binary
+- the dashboard recent activity is event-based and does not yet include an audit log
+- PDF export is text-first and optimized for defendable completeness rather than polished print layout
+
+See [docs/architecture.md](/docs/architecture.md) for the module breakdown.

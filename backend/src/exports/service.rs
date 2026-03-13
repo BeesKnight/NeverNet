@@ -25,9 +25,16 @@ use crate::{
 };
 
 const ALLOWED_FORMATS: [&str; 2] = ["pdf", "xlsx"];
+const ALLOWED_REPORT_TYPES: [&str; 1] = ["summary"];
 
 pub async fn list(state: &AppState, user_id: Uuid) -> Result<Vec<ExportJob>, AppError> {
     Ok(repository::list(&state.pool, user_id).await?)
+}
+
+pub async fn get(state: &AppState, user_id: Uuid, export_id: Uuid) -> Result<ExportJob, AppError> {
+    repository::find_by_id(&state.pool, user_id, export_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Export job not found".to_string()))
 }
 
 pub async fn create(
@@ -35,7 +42,15 @@ pub async fn create(
     user_id: Uuid,
     payload: CreateExportRequest,
 ) -> Result<ExportJob, AppError> {
+    let report_type = payload.report_type.trim().to_lowercase();
     let format = payload.format.trim().to_lowercase();
+
+    if !ALLOWED_REPORT_TYPES.contains(&report_type.as_str()) {
+        return Err(AppError::BadRequest(
+            "Report type must be summary".to_string(),
+        ));
+    }
+
     if !ALLOWED_FORMATS.contains(&format.as_str()) {
         return Err(AppError::BadRequest(
             "Export format must be either pdf or xlsx".to_string(),
@@ -44,7 +59,7 @@ pub async fn create(
 
     let filters = serde_json::to_value(&payload.filters)
         .map_err(|error| AppError::Internal(error.to_string()))?;
-    let job = repository::create(&state.pool, user_id, &format, filters).await?;
+    let job = repository::create(&state.pool, user_id, &report_type, &format, filters).await?;
 
     let state_clone = state.clone();
     tokio::spawn(async move {
@@ -156,20 +171,31 @@ async fn build_export_file(
 }
 
 fn build_pdf(path: &PathBuf, report: &ReportSummary) -> Result<(), AppError> {
-    let (document, page, layer) = PdfDocument::new("Event report", Mm(210.0), Mm(297.0), "Layer 1");
-    let current_layer = document.get_page(page).get_layer(layer);
+    let (document, first_page, first_layer) =
+        PdfDocument::new("NeverNet event report", Mm(210.0), Mm(297.0), "Layer 1");
     let font = document
         .add_builtin_font(BuiltinFont::Helvetica)
         .map_err(|error| AppError::Internal(error.to_string()))?;
 
     let mut y = 285.0;
-    let lines = pdf_lines(report);
-    for line in lines {
+    let mut page = first_page;
+    let mut layer = first_layer;
+    let mut current_layer = document.get_page(page).get_layer(layer);
+    let mut page_number = 1;
+
+    for line in pdf_lines(report) {
+        if y < 14.0 {
+            page_number += 1;
+            let (next_page, next_layer) =
+                document.add_page(Mm(210.0), Mm(297.0), format!("Layer {page_number}"));
+            page = next_page;
+            layer = next_layer;
+            current_layer = document.get_page(page).get_layer(layer);
+            y = 285.0;
+        }
+
         current_layer.use_text(line, 11.0, Mm(12.0), Mm(y), &font);
         y -= 7.0;
-        if y < 12.0 {
-            break;
-        }
     }
 
     let mut writer = BufWriter::new(File::create(path)?);
@@ -181,21 +207,43 @@ fn build_pdf(path: &PathBuf, report: &ReportSummary) -> Result<(), AppError> {
 
 fn pdf_lines(report: &ReportSummary) -> Vec<String> {
     let mut lines = vec![
-        "EventDesign Report".to_string(),
+        "NeverNet Event Report".to_string(),
         format!("Total events: {}", report.total_events),
         format!("Total budget: {:.2}", report.total_budget),
+        format!(
+            "Period: {} - {}",
+            report
+                .period_start
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "Any".to_string()),
+            report
+                .period_end
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "Any".to_string())
+        ),
         String::new(),
         "Events".to_string(),
     ];
 
     for event in &report.events {
         lines.push(format!(
-            "{} | {} | {} | {:.2}",
+            "{} | {} | {} | {}",
             event.starts_at.format("%Y-%m-%d %H:%M"),
             event.title,
-            event.status,
+            event.category_name,
+            event.status
+        ));
+        lines.push(format!(
+            "Location: {} | Ends: {} | Budget: {:.2}",
+            if event.location.trim().is_empty() {
+                "Not specified"
+            } else {
+                event.location.as_str()
+            },
+            event.ends_at.format("%Y-%m-%d %H:%M"),
             event.budget
         ));
+        lines.push(String::new());
     }
 
     lines
@@ -211,16 +259,19 @@ fn build_xlsx(path: &PathBuf, report: &ReportSummary) -> Result<(), AppError> {
         .write_string(0, 1, "Category")
         .map_err(map_xlsx_error)?;
     worksheet
-        .write_string(0, 2, "Status")
+        .write_string(0, 2, "Location")
         .map_err(map_xlsx_error)?;
     worksheet
-        .write_string(0, 3, "Starts At")
+        .write_string(0, 3, "Status")
         .map_err(map_xlsx_error)?;
     worksheet
-        .write_string(0, 4, "Ends At")
+        .write_string(0, 4, "Starts At")
         .map_err(map_xlsx_error)?;
     worksheet
-        .write_string(0, 5, "Budget")
+        .write_string(0, 5, "Ends At")
+        .map_err(map_xlsx_error)?;
+    worksheet
+        .write_string(0, 6, "Budget")
         .map_err(map_xlsx_error)?;
 
     for (index, event) in report.events.iter().enumerate() {
@@ -232,16 +283,19 @@ fn build_xlsx(path: &PathBuf, report: &ReportSummary) -> Result<(), AppError> {
             .write_string(row, 1, &event.category_name)
             .map_err(map_xlsx_error)?;
         worksheet
-            .write_string(row, 2, &event.status)
+            .write_string(row, 2, &event.location)
             .map_err(map_xlsx_error)?;
         worksheet
-            .write_string(row, 3, event.starts_at.format("%Y-%m-%d %H:%M").to_string())
+            .write_string(row, 3, &event.status)
             .map_err(map_xlsx_error)?;
         worksheet
-            .write_string(row, 4, event.ends_at.format("%Y-%m-%d %H:%M").to_string())
+            .write_string(row, 4, event.starts_at.format("%Y-%m-%d %H:%M").to_string())
             .map_err(map_xlsx_error)?;
         worksheet
-            .write_number(row, 5, event.budget)
+            .write_string(row, 5, event.ends_at.format("%Y-%m-%d %H:%M").to_string())
+            .map_err(map_xlsx_error)?;
+        worksheet
+            .write_number(row, 6, event.budget)
             .map_err(map_xlsx_error)?;
     }
 

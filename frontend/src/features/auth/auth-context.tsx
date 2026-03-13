@@ -6,6 +6,7 @@ import {
   useState,
   type PropsWithChildren,
 } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 
 import { apiRequest } from '../../api/client'
 import type { AuthResponse, User } from '../../api/types'
@@ -32,31 +33,57 @@ export type AuthContextValue = {
 const AuthContext = createContext<AuthContextValue | null>(null)
 
 export function AuthProvider({ children }: PropsWithChildren) {
+  const queryClient = useQueryClient()
   const [session, setSession] = useState<AuthResponse | null>(() => getStoredSession())
   const [isInitializing, setIsInitializing] = useState(() => Boolean(getStoredSession()?.token))
 
   useEffect(() => {
-    if (!session?.token) {
+    const token = session?.token
+
+    if (!token) {
       return
     }
 
-    apiRequest<User>('/auth/me', { token: session.token })
+    let isCancelled = false
+
+    apiRequest<User>('/auth/me', { token })
       .then((user) => {
-        const nextSession = {
-          ...session,
-          user,
+        if (isCancelled) {
+          return
         }
-        setSession(nextSession)
-        saveSession(nextSession)
+
+        setSession((current) => {
+          if (!current || current.token !== token) {
+            return current
+          }
+
+          const nextSession = {
+            ...current,
+            user,
+          }
+          saveSession(nextSession)
+          return nextSession
+        })
       })
       .catch(() => {
+        if (isCancelled) {
+          return
+        }
+
+        queryClient.clear()
         setSession(null)
         clearSession()
       })
       .finally(() => {
-        setIsInitializing(false)
+        if (!isCancelled) {
+          setIsInitializing(false)
+        }
       })
-  }, [session])
+
+    return () => {
+      isCancelled = true
+    }
+  }, [queryClient, session?.token])
 
   const value = useMemo<AuthContextValue>(
     () => ({
@@ -67,6 +94,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
           method: 'POST',
           body: JSON.stringify(payload),
         })
+        queryClient.clear()
         setSession(nextSession)
         saveSession(nextSession)
       },
@@ -75,12 +103,23 @@ export function AuthProvider({ children }: PropsWithChildren) {
           method: 'POST',
           body: JSON.stringify(payload),
         })
+        queryClient.clear()
         setSession(nextSession)
         saveSession(nextSession)
       },
       logout() {
+        const token = session?.token
+        queryClient.clear()
         clearSession()
         setSession(null)
+        setIsInitializing(false)
+
+        if (token) {
+          void apiRequest('/auth/logout', {
+            method: 'POST',
+            token,
+          }).catch(() => undefined)
+        }
       },
       updateUser(user) {
         setSession((current) => {
@@ -94,7 +133,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
         })
       },
     }),
-    [isInitializing, session],
+    [isInitializing, queryClient, session],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

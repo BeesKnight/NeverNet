@@ -34,3 +34,7 @@ pub async fn me(
     let user = service::get_current_user(&state, current_user.user_id).await?;
     Ok(Json(ApiResponse::new(user)))
 }
+
+pub async fn logout(_current_user: CurrentUser) -> Json<ApiResponse<&'static str>> {
+    Json(ApiResponse::new("logged_out"))
+}

@@ -1,13 +1,12 @@
+name: nevernet
+
 services:
   db:
     image: postgres:17-alpine
-    container_name: eventdesign-db
     environment:
       POSTGRES_DB: eventdesign
       POSTGRES_USER: eventdesign
       POSTGRES_PASSWORD: eventdesign
-    ports:
-      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -15,6 +14,40 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://eventdesign:eventdesign@db:5432/eventdesign
+      JWT_SECRET: ${JWT_SECRET:-replace-with-a-long-secret}
+      PORT: 8080
+      EXPORT_DIR: /app/storage/exports
+      RUST_LOG: backend=info,tower_http=info
+    volumes:
+      - backend_exports:/app/storage/exports
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: /api
+    depends_on:
+      - backend
+    ports:
+      - "3000:80"
+    restart: unless-stopped
 
 volumes:
   postgres_data:
+  backend_exports:

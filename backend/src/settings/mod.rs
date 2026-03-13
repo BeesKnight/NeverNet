@@ -8,5 +8,10 @@ use axum::{Router, routing::get};
 use crate::app_state::AppState;
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/", get(handlers::get).put(handlers::update))
+    Router::new().route(
+        "/",
+        get(handlers::get)
+            .put(handlers::update)
+            .patch(handlers::update),
+    )
 }

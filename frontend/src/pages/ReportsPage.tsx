@@ -20,12 +20,12 @@ export function ReportsPage() {
   const queryClient = useQueryClient()
 
   const categoriesQuery = useQuery({
-    queryKey: ['categories', 'reports'],
-    queryFn: () => apiRequest<Category[]>('/categories/', { token }),
+    queryKey: ['categories', session?.user.id, 'reports'],
+    queryFn: () => apiRequest<Category[]>('/categories', { token }),
   })
 
   const reportQuery = useQuery({
-    queryKey: ['reports', filters],
+    queryKey: ['reports', session?.user.id, filters],
     queryFn: () =>
       apiRequest<ReportSummary>(
         `/reports/summary${buildQueryString({
@@ -39,8 +39,8 @@ export function ReportsPage() {
   })
 
   const exportsQuery = useQuery({
-    queryKey: ['exports'],
-    queryFn: () => apiRequest<ExportJob[]>('/exports/', { token }),
+    queryKey: ['exports', session?.user.id],
+    queryFn: () => apiRequest<ExportJob[]>('/exports', { token }),
     refetchInterval: (query) => {
       const jobs = query.state.data ?? []
       return jobs.some((job) => job.status === 'pending' || job.status === 'processing')
@@ -51,10 +51,11 @@ export function ReportsPage() {
 
   const createExport = useMutation({
     mutationFn: (formatName: 'pdf' | 'xlsx') =>
-      apiRequest<ExportJob>('/exports/', {
+      apiRequest<ExportJob>('/exports', {
         method: 'POST',
         token,
         body: JSON.stringify({
+          report_type: 'summary',
           format: formatName,
           filters,
         }),
@@ -226,6 +227,49 @@ export function ReportsPage() {
       <section className="section-card">
         <div className="section-header">
           <div>
+            <p className="eyebrow">Events</p>
+            <h2>Detailed report scope</h2>
+          </div>
+        </div>
+
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Event</th>
+                <th>Category</th>
+                <th>Schedule</th>
+                <th>Location</th>
+                <th>Budget</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {report?.events.map((event) => (
+                <tr key={event.id}>
+                  <td>{event.title}</td>
+                  <td>{event.category_name}</td>
+                  <td>
+                    {format(new Date(event.starts_at), 'MMM d, yyyy HH:mm')}
+                    <br />
+                    <span className="muted">to {format(new Date(event.ends_at), 'MMM d, yyyy HH:mm')}</span>
+                  </td>
+                  <td>{event.location || 'Not specified'}</td>
+                  <td>${event.budget.toFixed(2)}</td>
+                  <td>
+                    <span className={`status-pill ${event.status}`}>{event.status.replace('_', ' ')}</span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {!report?.events.length ? <div className="empty-state">No events in this report scope.</div> : null}
+        </div>
+      </section>
+
+      <section className="section-card">
+        <div className="section-header">
+          <div>
             <p className="eyebrow">Exports</p>
             <h2>Background job history</h2>
           </div>
@@ -235,20 +279,24 @@ export function ReportsPage() {
           <table>
             <thead>
               <tr>
+                <th>Report</th>
                 <th>Format</th>
                 <th>Status</th>
                 <th>Created</th>
+                <th>Finished</th>
                 <th />
               </tr>
             </thead>
             <tbody>
               {exportJobs.map((job) => (
                 <tr key={job.id}>
+                  <td>{job.report_type}</td>
                   <td>{job.format.toUpperCase()}</td>
                   <td>
                     <span className={`status-pill ${job.status}`}>{job.status}</span>
                   </td>
                   <td>{format(new Date(job.created_at), 'MMM d, yyyy HH:mm')}</td>
+                  <td>{job.finished_at ? format(new Date(job.finished_at), 'MMM d, yyyy HH:mm') : 'In progress'}</td>
                   <td className="actions-cell">
                     {job.status === 'completed' ? (
                       <button

@@ -43,7 +43,14 @@ pub async fn register(
         &password_hash,
         payload.full_name.trim(),
     )
-    .await?;
+    .await
+    .map_err(|error| {
+        if crate::error::is_constraint(&error, "users_email_key") {
+            AppError::Conflict("Email is already registered".to_string())
+        } else {
+            AppError::from(error)
+        }
+    })?;
 
     repository::create_default_settings(&state.pool, user.id).await?;
 

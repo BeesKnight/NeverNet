@@ -6,7 +6,7 @@ use crate::exports::models::ExportJob;
 pub async fn list(pool: &PgPool, user_id: Uuid) -> Result<Vec<ExportJob>, sqlx::Error> {
     sqlx::query_as::<_, ExportJob>(
         r#"
-        SELECT id, user_id, format, status, filters, file_path, error_message, created_at, updated_at, completed_at
+        SELECT id, user_id, report_type, format, status, filters, file_path, error_message, created_at, updated_at, finished_at
         FROM export_jobs
         WHERE user_id = $1
         ORDER BY created_at DESC
@@ -24,7 +24,7 @@ pub async fn find_by_id(
 ) -> Result<Option<ExportJob>, sqlx::Error> {
     sqlx::query_as::<_, ExportJob>(
         r#"
-        SELECT id, user_id, format, status, filters, file_path, error_message, created_at, updated_at, completed_at
+        SELECT id, user_id, report_type, format, status, filters, file_path, error_message, created_at, updated_at, finished_at
         FROM export_jobs
         WHERE user_id = $1 AND id = $2
         "#,
@@ -41,7 +41,7 @@ pub async fn find_by_job_id(
 ) -> Result<Option<ExportJob>, sqlx::Error> {
     sqlx::query_as::<_, ExportJob>(
         r#"
-        SELECT id, user_id, format, status, filters, file_path, error_message, created_at, updated_at, completed_at
+        SELECT id, user_id, report_type, format, status, filters, file_path, error_message, created_at, updated_at, finished_at
         FROM export_jobs
         WHERE id = $1
         "#,
@@ -54,17 +54,19 @@ pub async fn find_by_job_id(
 pub async fn create(
     pool: &PgPool,
     user_id: Uuid,
+    report_type: &str,
     format: &str,
     filters: serde_json::Value,
 ) -> Result<ExportJob, sqlx::Error> {
     sqlx::query_as::<_, ExportJob>(
         r#"
-        INSERT INTO export_jobs (user_id, format, status, filters)
-        VALUES ($1, $2, 'pending', $3)
-        RETURNING id, user_id, format, status, filters, file_path, error_message, created_at, updated_at, completed_at
+        INSERT INTO export_jobs (user_id, report_type, format, status, filters)
+        VALUES ($1, $2, $3, 'pending', $4)
+        RETURNING id, user_id, report_type, format, status, filters, file_path, error_message, created_at, updated_at, finished_at
         "#,
     )
     .bind(user_id)
+    .bind(report_type)
     .bind(format)
     .bind(filters)
     .fetch_one(pool)
@@ -89,7 +91,7 @@ pub async fn complete(pool: &PgPool, job_id: Uuid, file_path: &str) -> Result<()
     sqlx::query(
         r#"
         UPDATE export_jobs
-        SET status = 'completed', file_path = $2, completed_at = NOW(), updated_at = NOW()
+        SET status = 'completed', file_path = $2, finished_at = NOW(), updated_at = NOW()
         WHERE id = $1
         "#,
     )
@@ -118,7 +120,7 @@ pub async fn fail(pool: &PgPool, job_id: Uuid, error_message: &str) -> Result<()
 pub async fn pending(pool: &PgPool) -> Result<Vec<ExportJob>, sqlx::Error> {
     sqlx::query_as::<_, ExportJob>(
         r#"
-        SELECT id, user_id, format, status, filters, file_path, error_message, created_at, updated_at, completed_at
+        SELECT id, user_id, report_type, format, status, filters, file_path, error_message, created_at, updated_at, finished_at
         FROM export_jobs
         WHERE status IN ('pending', 'processing')
         ORDER BY created_at ASC

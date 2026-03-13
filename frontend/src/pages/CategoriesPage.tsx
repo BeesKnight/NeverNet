@@ -15,20 +15,20 @@ export function CategoriesPage() {
 
   const categoriesQuery = useQuery({
     queryKey: ['categories'],
-    queryFn: () => apiRequest<Category[]>('/categories/', { token }),
+    queryFn: () => apiRequest<Category[]>('/categories', { token }),
   })
 
   const saveCategory = useMutation({
     mutationFn: async (values: { name: string; color: string }) => {
       if (editingCategory) {
         return apiRequest<Category>(`/categories/${editingCategory.id}`, {
-          method: 'PUT',
+          method: 'PATCH',
           token,
           body: JSON.stringify(values),
         })
       }
 
-      return apiRequest<Category>('/categories/', {
+      return apiRequest<Category>('/categories', {
         method: 'POST',
         token,
         body: JSON.stringify(values),

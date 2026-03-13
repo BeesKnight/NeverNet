@@ -78,3 +78,12 @@ impl From<axum::http::Error> for AppError {
         AppError::Internal(error.to_string())
     }
 }
+
+pub fn is_constraint(error: &sqlx::Error, constraint_name: &str) -> bool {
+    match error {
+        sqlx::Error::Database(database_error) => {
+            database_error.constraint() == Some(constraint_name)
+        }
+        _ => false,
+    }
+}

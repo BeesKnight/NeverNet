@@ -26,10 +26,10 @@ export function CalendarPage() {
   const monthEnd = endOfMonth(currentMonth)
 
   const eventsQuery = useQuery({
-    queryKey: ['calendar-events', format(monthStart, 'yyyy-MM')],
+    queryKey: ['calendar-events', session?.user.id, format(monthStart, 'yyyy-MM')],
     queryFn: () =>
       apiRequest<Event[]>(
-        `/events/${buildQueryString({
+        `/calendar${buildQueryString({
           start_date: format(monthStart, 'yyyy-MM-dd'),
           end_date: format(monthEnd, 'yyyy-MM-dd'),
         })}`,

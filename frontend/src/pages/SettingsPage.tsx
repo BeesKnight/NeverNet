@@ -10,16 +10,16 @@ export function SettingsPage() {
   const queryClient = useQueryClient()
 
   const settingsQuery = useQuery({
-    queryKey: ['settings'],
-    queryFn: () => apiRequest<UiSettings>('/settings/', { token }),
+    queryKey: ['settings', session?.user.id],
+    queryFn: () => apiRequest<UiSettings>('/settings', { token }),
   })
 
   const updateSettings = useMutation({
-    mutationFn: (theme: UiSettings['theme']) =>
-      apiRequest<UiSettings>('/settings/', {
-        method: 'PUT',
+    mutationFn: (payload: Partial<Pick<UiSettings, 'theme' | 'accent_color' | 'default_view'>>) =>
+      apiRequest<UiSettings>('/settings', {
+        method: 'PATCH',
         token,
-        body: JSON.stringify({ theme }),
+        body: JSON.stringify(payload),
       }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['settings'] })
@@ -34,21 +34,58 @@ export function SettingsPage() {
         <div className="section-header">
           <div>
             <p className="eyebrow">Preferences</p>
-            <h2>Theme settings</h2>
+            <h2>Interface settings</h2>
           </div>
         </div>
 
-        <div className="button-row">
-          {(['system', 'light', 'dark'] as const).map((theme) => (
-            <button
-              key={theme}
-              className={settings?.theme === theme ? 'primary-button' : 'ghost-button'}
-              type="button"
-              onClick={() => updateSettings.mutate(theme)}
+        <div className="form-grid">
+          <label>
+            <span>Theme</span>
+          </label>
+
+          <div className="button-row">
+            {(['system', 'light', 'dark'] as const).map((theme) => (
+              <button
+                key={theme}
+                className={settings?.theme === theme ? 'primary-button' : 'ghost-button'}
+                type="button"
+                onClick={() => updateSettings.mutate({ theme })}
+              >
+                {theme}
+              </button>
+            ))}
+          </div>
+
+          <label>
+            <span>Accent color</span>
+            <div className="form-actions">
+              <input
+                type="color"
+                value={settings?.accent_color ?? '#b6532f'}
+                onChange={(event) =>
+                  updateSettings.mutate({ accent_color: event.target.value })
+                }
+              />
+              <span className="muted">{settings?.accent_color ?? '#b6532f'}</span>
+            </div>
+          </label>
+
+          <label>
+            <span>Default start page</span>
+            <select
+              value={settings?.default_view ?? 'dashboard'}
+              onChange={(event) =>
+                updateSettings.mutate({
+                  default_view: event.target.value as UiSettings['default_view'],
+                })
+              }
             >
-              {theme}
-            </button>
-          ))}
+              <option value="dashboard">Dashboard</option>
+              <option value="events">Events</option>
+              <option value="calendar">Calendar</option>
+              <option value="reports">Reports</option>
+            </select>
+          </label>
         </div>
       </section>
 
@@ -72,6 +109,14 @@ export function SettingsPage() {
           <div>
             <span className="muted">Theme</span>
             <strong>{settings?.theme ?? 'system'}</strong>
+          </div>
+          <div>
+            <span className="muted">Accent</span>
+            <strong>{settings?.accent_color ?? '#b6532f'}</strong>
+          </div>
+          <div>
+            <span className="muted">Default view</span>
+            <strong>{settings?.default_view ?? 'dashboard'}</strong>
           </div>
         </div>
       </section>

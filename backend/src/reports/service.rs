@@ -50,14 +50,40 @@ pub async fn generate_summary(
             });
     }
 
+    let mut by_category: Vec<_> = category_map.into_values().collect();
+    by_category.sort_by(|left, right| {
+        right
+            .total_budget
+            .total_cmp(&left.total_budget)
+            .then_with(|| right.event_count.cmp(&left.event_count))
+            .then_with(|| left.category_name.cmp(&right.category_name))
+    });
+
+    let mut by_status: Vec<_> = status_map.into_values().collect();
+    by_status.sort_by(|left, right| {
+        right
+            .event_count
+            .cmp(&left.event_count)
+            .then_with(|| right.total_budget.total_cmp(&left.total_budget))
+            .then_with(|| left.status.cmp(&right.status))
+    });
+
     Ok(ReportSummary {
         period_start: filters.start_date,
         period_end: filters.end_date,
         filters,
         total_events,
         total_budget,
-        by_category: category_map.into_values().collect(),
-        by_status: status_map.into_values().collect(),
+        by_category,
+        by_status,
         events,
     })
+}
+
+pub async fn generate_by_category(
+    state: &AppState,
+    user_id: Uuid,
+    filters: EventFilters,
+) -> Result<Vec<CategoryReportRow>, AppError> {
+    Ok(generate_summary(state, user_id, filters).await?.by_category)
 }

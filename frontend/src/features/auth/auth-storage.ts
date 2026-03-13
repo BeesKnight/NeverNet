@@ -1,6 +1,6 @@
 import type { AuthResponse } from '../../api/types'
 
-const STORAGE_KEY = 'eventdesign-session'
+const STORAGE_KEY = 'nevernet-session'
 
 export function getStoredSession(): AuthResponse | null {
   const raw = localStorage.getItem(STORAGE_KEY)

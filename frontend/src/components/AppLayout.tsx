@@ -19,10 +19,10 @@ export function AppLayout({ children }: PropsWithChildren) {
     <div className="shell">
       <aside className="sidebar">
         <div className="brand-block">
-          <p className="eyebrow">EventDesign</p>
-          <h1>Plan work that still feels organized at scale.</h1>
+          <p className="eyebrow">NeverNet</p>
+          <h1>Plan events with enough structure to stay defendable.</h1>
           <p className="sidebar-copy">
-            Modular event planning with reports, exports, and a live calendar view.
+            Modular event planning with reports, exports, persistent settings, and a live calendar view.
           </p>
         </div>
 

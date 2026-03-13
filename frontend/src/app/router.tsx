@@ -11,6 +11,10 @@ import { RegisterPage } from '../pages/RegisterPage'
 import { ReportsPage } from '../pages/ReportsPage'
 import { SettingsPage } from '../pages/SettingsPage'
 
+type AppRoutesProps = {
+  defaultAuthenticatedPath: string
+}
+
 function ProtectedOutlet() {
   const auth = useAuth()
 
@@ -25,7 +29,7 @@ function ProtectedOutlet() {
   return <AppLayout><Outlet /></AppLayout>
 }
 
-function PublicOnlyOutlet() {
+function PublicOnlyOutlet({ defaultAuthenticatedPath }: AppRoutesProps) {
   const auth = useAuth()
 
   if (auth.isInitializing) {
@@ -33,22 +37,22 @@ function PublicOnlyOutlet() {
   }
 
   if (auth.session) {
-    return <Navigate to="/dashboard" replace />
+    return <Navigate to={defaultAuthenticatedPath} replace />
   }
 
   return <Outlet />
 }
 
-export function AppRoutes() {
+export function AppRoutes({ defaultAuthenticatedPath }: AppRoutesProps) {
   return (
     <Routes>
-      <Route element={<PublicOnlyOutlet />}>
+      <Route element={<PublicOnlyOutlet defaultAuthenticatedPath={defaultAuthenticatedPath} />}>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
       </Route>
 
       <Route element={<ProtectedOutlet />}>
-        <Route path="/" element={<Navigate to="/dashboard" replace />} />
+        <Route path="/" element={<Navigate to={defaultAuthenticatedPath} replace />} />
         <Route path="/dashboard" element={<DashboardPage />} />
         <Route path="/categories" element={<CategoriesPage />} />
         <Route path="/events" element={<EventsPage />} />

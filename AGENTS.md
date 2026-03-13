@@ -2,7 +2,7 @@
 
 ## Project summary
 
-This repository contains **EventDesign**, a full-stack graduation project for event planning and event management.
+This repository contains **NeverNet**, a full-stack graduation project for event planning and event management.
 
 The required product scope is:
 - user registration and authentication
@@ -49,7 +49,7 @@ Do not introduce unnecessary microservices, gRPC layers, brokers, or wasm-based 
 
 ## Product rules
 
-Implement only what supports the EventDesign scope.
+Implement only what supports the NeverNet scope.
 
 Core entities:
 - users

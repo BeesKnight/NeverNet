@@ -14,5 +14,10 @@ use crate::app_state::AppState;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(handlers::list).post(handlers::create))
-        .route("/:id", put(handlers::update).delete(handlers::delete))
+        .route(
+            "/{id}",
+            put(handlers::update)
+                .patch(handlers::update)
+                .delete(handlers::delete),
+        )
 }

@@ -12,9 +12,10 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(handlers::list).post(handlers::create))
         .route(
-            "/:id",
+            "/{id}",
             get(handlers::get)
                 .put(handlers::update)
+                .patch(handlers::update)
                 .delete(handlers::delete),
         )
 }

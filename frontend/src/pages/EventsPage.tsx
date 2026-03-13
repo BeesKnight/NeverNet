@@ -35,14 +35,14 @@ export function EventsPage() {
 
   const categoriesQuery = useQuery({
     queryKey: ['categories', 'events'],
-    queryFn: () => apiRequest<Category[]>('/categories/', { token }),
+    queryFn: () => apiRequest<Category[]>('/categories', { token }),
   })
 
   const eventsQuery = useQuery({
     queryKey: ['events', filters],
     queryFn: () =>
       apiRequest<Event[]>(
-        `/events/${buildQueryString({
+        `/events${buildQueryString({
           search: filters.search || undefined,
           status: filters.status || undefined,
           category_id: filters.category_id || undefined,
@@ -57,13 +57,13 @@ export function EventsPage() {
     mutationFn: async (values: EventFormPayload) => {
       if (editingEvent) {
         return apiRequest<EventRecord>(`/events/${editingEvent.id}`, {
-          method: 'PUT',
+          method: 'PATCH',
           token,
           body: JSON.stringify(values),
         })
       }
 
-      return apiRequest<EventRecord>('/events/', {
+      return apiRequest<EventRecord>('/events', {
         method: 'POST',
         token,
         body: JSON.stringify(values),

@@ -16,10 +16,10 @@ export function RegisterPage() {
   return (
     <div className="auth-shell">
       <section className="auth-panel">
-        <p className="eyebrow">EventDesign</p>
+        <p className="eyebrow">NeverNet</p>
         <h1>Create an event workspace that stays practical.</h1>
         <p className="panel-copy">
-          Registration creates your account and your default theme settings in one step.
+          Registration creates your account and your default interface preferences in one step.
         </p>
       </section>
 
@@ -44,7 +44,7 @@ export function RegisterPage() {
                 email,
                 password,
               })
-              navigate('/dashboard')
+              navigate('/')
             } catch (submissionError) {
               setError(
                 submissionError instanceof ApiError
@@ -63,7 +63,12 @@ export function RegisterPage() {
 
           <label>
             <span>Email</span>
-            <input value={email} onChange={(event) => setEmail(event.target.value)} required />
+            <input
+              type="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              required
+            />
           </label>
 
           <label>

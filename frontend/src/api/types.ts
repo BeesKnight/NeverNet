@@ -93,6 +93,8 @@ export type ReportSummary = {
 export type UiSettings = {
   user_id: string
   theme: 'light' | 'dark' | 'system'
+  accent_color: string
+  default_view: 'dashboard' | 'events' | 'calendar' | 'reports'
   created_at: string
   updated_at: string
 }
@@ -100,6 +102,7 @@ export type UiSettings = {
 export type ExportJob = {
   id: string
   user_id: string
+  report_type: 'summary'
   format: 'pdf' | 'xlsx'
   status: 'pending' | 'processing' | 'completed' | 'failed'
   filters: EventFilters
@@ -107,5 +110,5 @@ export type ExportJob = {
   error_message: string | null
   created_at: string
   updated_at: string
-  completed_at: string | null
+  finished_at: string | null
 }
