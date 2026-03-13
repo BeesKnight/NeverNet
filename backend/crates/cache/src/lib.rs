@@ -12,3 +12,7 @@ impl CacheConfig {
         }
     }
 }
+
+pub fn dashboard_key(user_id: &str) -> String {
+    format!("dashboard:{user_id}")
+}

@@ -2,17 +2,20 @@ syntax = "proto3";
 
 package eventdesign.internal.reporting.v1;
 
-message ReportAck {
-  string message = 1;
-  string mode = 2;
-}
-
-message SummaryRequest {
-  string user_id = 1;
-  string category_id = 2;
-  string status = 3;
-  string start_date = 4;
-  string end_date = 5;
+message ExportJob {
+  string id = 1;
+  string user_id = 2;
+  string report_type = 3;
+  string format = 4;
+  string status = 5;
+  string filters_json = 6;
+  string object_key = 7;
+  string content_type = 8;
+  string error_message = 9;
+  string created_at = 10;
+  string started_at = 11;
+  string updated_at = 12;
+  string finished_at = 13;
 }
 
 message CreateExportRequest {
@@ -22,13 +25,41 @@ message CreateExportRequest {
   string filters_json = 4;
 }
 
+message CreateExportReply {
+  ExportJob job = 1;
+}
+
+message ListExportsRequest {
+  string user_id = 1;
+}
+
+message ListExportsReply {
+  repeated ExportJob items = 1;
+}
+
 message GetExportRequest {
   string user_id = 1;
   string export_id = 2;
 }
 
+message GetExportReply {
+  ExportJob job = 1;
+}
+
+message DownloadExportRequest {
+  string user_id = 1;
+  string export_id = 2;
+}
+
+message DownloadExportReply {
+  bytes bytes = 1;
+  string content_type = 2;
+  string file_name = 3;
+}
+
 service ReportService {
-  rpc GetSummary(SummaryRequest) returns (ReportAck);
-  rpc CreateExport(CreateExportRequest) returns (ReportAck);
-  rpc GetExportStatus(GetExportRequest) returns (ReportAck);
+  rpc CreateExport(CreateExportRequest) returns (CreateExportReply);
+  rpc ListExports(ListExportsRequest) returns (ListExportsReply);
+  rpc GetExport(GetExportRequest) returns (GetExportReply);
+  rpc DownloadExport(DownloadExportRequest) returns (DownloadExportReply);
 }

@@ -2,13 +2,79 @@ syntax = "proto3";
 
 package eventdesign.internal.eventquery.v1;
 
-message QueryAck {
-  string message = 1;
-  string mode = 2;
+message Category {
+  string id = 1;
+  string user_id = 2;
+  string name = 3;
+  string color = 4;
+  string created_at = 5;
+  string updated_at = 6;
+}
+
+message EventItem {
+  string id = 1;
+  string user_id = 2;
+  string category_id = 3;
+  string category_name = 4;
+  string category_color = 5;
+  string title = 6;
+  string description = 7;
+  string location = 8;
+  string starts_at = 9;
+  string ends_at = 10;
+  double budget = 11;
+  string status = 12;
+  string created_at = 13;
+  string updated_at = 14;
+}
+
+message CalendarItem {
+  string event_id = 1;
+  string title = 2;
+  string date = 3;
+  string starts_at = 4;
+  string ends_at = 5;
+  string status = 6;
+  string category_color = 7;
+}
+
+message DashboardCards {
+  int64 total_events = 1;
+  int64 upcoming_events = 2;
+  int64 completed_events = 3;
+  int64 cancelled_events = 4;
+  double total_budget = 5;
+}
+
+message ActivityItem {
+  string id = 1;
+  string entity_type = 2;
+  string entity_id = 3;
+  string action = 4;
+  string title = 5;
+  string occurred_at = 6;
+}
+
+message ReportCategoryRow {
+  string category_id = 1;
+  string category_name = 2;
+  string category_color = 3;
+  int64 event_count = 4;
+  double total_budget = 5;
+}
+
+message ReportStatusRow {
+  string status = 1;
+  int64 event_count = 2;
+  double total_budget = 3;
 }
 
 message ListCategoriesRequest {
   string user_id = 1;
+}
+
+message ListCategoriesReply {
+  repeated Category items = 1;
 }
 
 message ListEventsRequest {
@@ -20,26 +86,62 @@ message ListEventsRequest {
   string end_date = 6;
 }
 
+message ListEventsReply {
+  repeated EventItem items = 1;
+}
+
 message GetEventRequest {
   string user_id = 1;
   string event_id = 2;
 }
 
+message EventReply {
+  EventItem event = 1;
+}
+
 message GetCalendarRequest {
   string user_id = 1;
-  string month = 2;
-  string year = 3;
+  string start_date = 2;
+  string end_date = 3;
+}
+
+message CalendarReply {
+  repeated CalendarItem items = 1;
 }
 
 message GetDashboardRequest {
   string user_id = 1;
 }
 
-service EventQueryService {
-  rpc ListCategories(ListCategoriesRequest) returns (QueryAck);
-  rpc ListEvents(ListEventsRequest) returns (QueryAck);
-  rpc GetEvent(GetEventRequest) returns (QueryAck);
-  rpc GetCalendar(GetCalendarRequest) returns (QueryAck);
-  rpc GetDashboard(GetDashboardRequest) returns (QueryAck);
+message DashboardReply {
+  DashboardCards cards = 1;
+  repeated EventItem upcoming = 2;
+  repeated ActivityItem recent_activity = 3;
 }
 
+message GetReportSummaryRequest {
+  string user_id = 1;
+  string category_id = 2;
+  string status = 3;
+  string start_date = 4;
+  string end_date = 5;
+}
+
+message ReportSummaryReply {
+  string period_start = 1;
+  string period_end = 2;
+  int64 total_events = 3;
+  double total_budget = 4;
+  repeated ReportCategoryRow by_category = 5;
+  repeated ReportStatusRow by_status = 6;
+  repeated EventItem events = 7;
+}
+
+service EventQueryService {
+  rpc ListCategories(ListCategoriesRequest) returns (ListCategoriesReply);
+  rpc ListEvents(ListEventsRequest) returns (ListEventsReply);
+  rpc GetEvent(GetEventRequest) returns (EventReply);
+  rpc GetCalendar(GetCalendarRequest) returns (CalendarReply);
+  rpc GetDashboard(GetDashboardRequest) returns (DashboardReply);
+  rpc GetReportSummary(GetReportSummaryRequest) returns (ReportSummaryReply);
+}

@@ -1,11 +1,9 @@
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sqlx::FromRow;
 use uuid::Uuid;
 
-use crate::events::models::EventFilters;
-
-#[derive(Debug, Clone, FromRow, Serialize)]
+#[derive(Debug, Clone, FromRow)]
 pub struct ExportJob {
     pub id: Uuid,
     pub user_id: Uuid,
@@ -22,15 +20,17 @@ pub struct ExportJob {
     pub finished_at: Option<DateTime<Utc>>,
 }
 
-fn default_report_type() -> String {
-    "summary".to_string()
-}
-
-#[derive(Debug, Deserialize)]
-pub struct CreateExportRequest {
-    #[serde(default = "default_report_type")]
+#[derive(Debug, Serialize)]
+pub struct ExportEventPayload {
+    pub export_id: Uuid,
+    pub user_id: Uuid,
     pub report_type: String,
     pub format: String,
-    #[serde(default)]
-    pub filters: EventFilters,
+    pub status: String,
+    pub filters: serde_json::Value,
+    pub object_key: Option<String>,
+    pub error_message: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub finished_at: Option<DateTime<Utc>>,
 }

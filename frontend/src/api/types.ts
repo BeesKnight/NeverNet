@@ -64,6 +64,39 @@ export type EventFilters = {
   end_date?: string
 }
 
+export type CalendarItem = {
+  event_id: string
+  title: string
+  date: string
+  starts_at: string
+  ends_at: string
+  status: EventStatus
+  category_color: string
+}
+
+export type DashboardCards = {
+  total_events: number
+  upcoming_events: number
+  completed_events: number
+  cancelled_events: number
+  total_budget: number
+}
+
+export type RecentActivityItem = {
+  id: string
+  entity_type: string
+  entity_id: string
+  action: string
+  title: string
+  occurred_at: string
+}
+
+export type DashboardResponse = {
+  cards: DashboardCards
+  upcoming: Event[]
+  recent_activity: RecentActivityItem[]
+}
+
 export type ReportCategoryRow = {
   category_id: string
   category_name: string
@@ -103,11 +136,13 @@ export type ExportJob = {
   user_id: string
   report_type: 'summary'
   format: 'pdf' | 'xlsx'
-  status: 'pending' | 'processing' | 'completed' | 'failed'
+  status: 'queued' | 'processing' | 'completed' | 'failed'
   filters: EventFilters
-  file_path: string | null
+  object_key: string | null
+  content_type: string | null
   error_message: string | null
   created_at: string
+  started_at: string | null
   updated_at: string
   finished_at: string | null
 }

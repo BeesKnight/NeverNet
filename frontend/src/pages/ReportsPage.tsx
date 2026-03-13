@@ -44,7 +44,7 @@ export function ReportsPage() {
     enabled: Boolean(session?.user.id),
     refetchInterval: (query) => {
       const jobs = query.state.data ?? []
-      return jobs.some((job) => job.status === 'pending' || job.status === 'processing')
+      return jobs.some((job) => job.status === 'queued' || job.status === 'processing')
         ? 3_000
         : false
     },

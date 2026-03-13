@@ -80,10 +80,19 @@ Phase 1 compatibility note:
 - status
 - filters_json
 - object_key
+- content_type
 - error_message
 - created_at
 - started_at
 - finished_at
+
+### processed_messages
+- consumer_name
+- message_id
+- processed_at
+
+Purpose:
+- deduplicate idempotent consumers such as projection updates
 
 ## Read-side projection tables
 
@@ -182,9 +191,11 @@ Suggested fields:
 
 ### Export lifecycle
 1. report service creates `export_jobs` row
-2. export worker processes job
-3. generated file is uploaded to MinIO
-4. `export_jobs` row is updated with result
+2. report service writes `export.requested` to outbox
+3. outbox relay publishes the event to JetStream
+4. export worker processes job
+5. generated file is uploaded to MinIO
+6. `export_jobs` row is updated with result
 
 ## Optional future additions
 

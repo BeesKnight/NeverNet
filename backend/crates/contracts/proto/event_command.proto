@@ -2,9 +2,38 @@ syntax = "proto3";
 
 package eventdesign.internal.eventcommand.v1;
 
-message CommandAck {
-  string message = 1;
-  string mode = 2;
+message Empty {}
+
+message Category {
+  string id = 1;
+  string user_id = 2;
+  string name = 3;
+  string color = 4;
+  string created_at = 5;
+  string updated_at = 6;
+}
+
+message EventRecord {
+  string id = 1;
+  string user_id = 2;
+  string category_id = 3;
+  string title = 4;
+  string description = 5;
+  string location = 6;
+  string starts_at = 7;
+  string ends_at = 8;
+  double budget = 9;
+  string status = 10;
+  string created_at = 11;
+  string updated_at = 12;
+}
+
+message CategoryReply {
+  Category category = 1;
+}
+
+message EventReply {
+  EventRecord event = 1;
 }
 
 message CreateCategoryRequest {
@@ -56,11 +85,10 @@ message DeleteEventRequest {
 }
 
 service EventCommandService {
-  rpc CreateCategory(CreateCategoryRequest) returns (CommandAck);
-  rpc UpdateCategory(UpdateCategoryRequest) returns (CommandAck);
-  rpc DeleteCategory(DeleteCategoryRequest) returns (CommandAck);
-  rpc CreateEvent(CreateEventRequest) returns (CommandAck);
-  rpc UpdateEvent(UpdateEventRequest) returns (CommandAck);
-  rpc DeleteEvent(DeleteEventRequest) returns (CommandAck);
+  rpc CreateCategory(CreateCategoryRequest) returns (CategoryReply);
+  rpc UpdateCategory(UpdateCategoryRequest) returns (CategoryReply);
+  rpc DeleteCategory(DeleteCategoryRequest) returns (Empty);
+  rpc CreateEvent(CreateEventRequest) returns (EventReply);
+  rpc UpdateEvent(UpdateEventRequest) returns (EventReply);
+  rpc DeleteEvent(DeleteEventRequest) returns (Empty);
 }
-

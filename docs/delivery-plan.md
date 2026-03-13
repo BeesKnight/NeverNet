@@ -81,6 +81,24 @@ After Phase 2:
 - export worker implementation
 - cache strategy introduction
 
+### Phase 2 implementation status
+
+Implemented:
+
+- `event-command-svc` now owns category and event writes
+- category and event mutations write to `outbox_events` in the same transaction
+- worker relays outbox rows to NATS JetStream
+- projection tables power event list, calendar, dashboard, and report-preview reads
+- Redis now caches dashboard reads and export workers use Redis locks
+- `report-svc` owns export job creation, lookup, and MinIO-backed downloads
+- worker generates PDF/XLSX exports asynchronously and uploads them to MinIO
+
+Temporary compatibility layers still present:
+
+- `edge-api` still owns the public REST contract and response shaping
+- settings remain local to `edge-api`
+- identity still uses the Phase 1 signed-cookie session compatibility path
+
 ## Phase 3: Hardening, polish, defense
 
 ### Objectives

@@ -3,6 +3,7 @@ mod auth;
 mod calendar;
 mod categories;
 mod config;
+mod dashboard;
 mod error;
 mod events;
 mod exports;
@@ -37,7 +38,6 @@ async fn main() -> Result<(), AppError> {
     sqlx::migrate!("../../migrations").run(&pool).await?;
 
     let state = AppState::new(pool, config.clone());
-    exports::service::resume_pending_jobs(state.clone()).await;
 
     let origins = config
         .frontend_origins
@@ -65,6 +65,7 @@ async fn main() -> Result<(), AppError> {
         .nest("/api/auth", auth::router())
         .nest("/api/calendar", calendar::router())
         .nest("/api/categories", categories::router())
+        .nest("/api/dashboard", dashboard::router())
         .nest("/api/events", events::router())
         .nest("/api/reports", reports::router())
         .nest("/api/settings", settings::router())

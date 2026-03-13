@@ -1,8 +1,6 @@
 mod handlers;
 pub mod models;
-pub mod repository;
 mod service;
-mod validation;
 
 use axum::{Router, routing::get};
 

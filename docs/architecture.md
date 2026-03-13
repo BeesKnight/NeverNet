@@ -6,9 +6,9 @@ EventDesign is a high-load inspired full-stack system for event planning and eve
 
 The architecture should look like a production-grade product, while still being practical to implement under deadline pressure.
 
-## Phase 1 Status
+## Phase 2 Status
 
-The repository is currently in the foundation phase.
+The repository is currently in the CQRS and async-backbone phase.
 
 Implemented now:
 
@@ -17,12 +17,20 @@ Implemented now:
 - `identity-svc` is live and handles auth over gRPC
 - frontend auth uses an HttpOnly cookie flow and `credentials: include`
 - Docker Compose starts PostgreSQL, Redis, NATS JetStream, and MinIO
+- `event-command-svc` owns category and event mutations
+- category and event mutations write durable outbox rows in the same transaction
+- worker relays outbox rows to NATS JetStream and retries failed publishes
+- `event-query-svc` serves event list, calendar, dashboard, and report-preview reads
+- read-heavy screens are served from projection tables
+- dashboard responses are cached in Redis and invalidated from projection updates
+- `report-svc` owns export job creation, metadata lookup, and MinIO-backed download reads
+- worker processes export jobs asynchronously and uploads generated files to MinIO
 
-Phase 1 compatibility layers:
+Phase 2 compatibility layers:
 
-- categories, events, calendar, reports, settings, and exports still execute inside `edge-api`
-- `event-command-svc`, `event-query-svc`, `report-svc`, and `worker` are service skeletons with explicit contracts
-- export files still land in shared local storage while MinIO is introduced for the next phase
+- `edge-api` still owns the external REST surface and UI-oriented response mapping
+- settings still execute inside `edge-api` until a later migration step
+- identity still uses the Phase 1 signed-cookie session compatibility path
 
 Architecture style:
 
@@ -47,19 +55,21 @@ Browser
 
 Edge API / BFF
   -> Identity Service (gRPC)
-  -> Phase 1 compatibility modules for categories, events, reports, settings, and exports
-  -> Event Command / Query / Report service contracts
+  -> Event Command Service (gRPC)
+  -> Event Query Service (gRPC)
+  -> Report Service (gRPC)
+  -> settings compatibility module
 
 Identity Service
   -> PostgreSQL
   -> signed cookie session compatibility
 
-Phase 2 target
+Phase 2 live flow
   -> Event Command Service -> PostgreSQL write schema + outbox
-  -> Outbox Relay / Publisher -> NATS JetStream
-  -> NATS JetStream -> workers and projections
-  -> Event Query Service -> projection/read schema + Redis cache
-  -> Report Service -> read schema + MinIO + export jobs
+  -> Worker outbox relay -> NATS JetStream
+  -> NATS JetStream -> projection worker + export worker
+  -> Event Query Service -> projection/read schema + Redis dashboard cache
+  -> Report Service -> export job metadata + MinIO downloads
 
 Frontend
   -> communicates only with Edge API / BFF
@@ -146,19 +156,21 @@ This service reads from projection tables and optimized read models.
 Responsibilities:
 
 - create export jobs
-- generate PDF / XLSX
-- store generated files in object storage
 - report job status lookup
-- secure download flow
+- secure artifact metadata lookup
+- secure MinIO-backed download flow
 
 ### Workers
 
 Workers are responsible for:
 
+- relaying outbox rows to JetStream
 - consuming domain events
 - updating read models / projections
-- invalidating or warming cache
+- invalidating dashboard cache
 - processing export jobs
+- generating PDF / XLSX artifacts
+- uploading files to MinIO
 - maintaining activity / audit records
 
 ## Data flow types

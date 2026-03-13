@@ -1,13 +1,19 @@
+use chrono::{DateTime, Utc};
+use contracts::event_command::event_command_service_client::EventCommandServiceClient;
+use contracts::event_command::{
+    CreateEventRequest as CommandCreateEventRequest,
+    UpdateEventRequest as CommandUpdateEventRequest,
+};
+use contracts::event_query::event_query_service_client::EventQueryServiceClient;
+use contracts::event_query::{
+    GetEventRequest as QueryGetEventRequest, ListEventsRequest as QueryListEventsRequest,
+};
 use uuid::Uuid;
 
 use crate::{
     app_state::AppState,
-    categories::repository as categories_repository,
     error::AppError,
-    events::{
-        models::{CreateEventRequest, Event, EventFilters, EventListItem, UpdateEventRequest},
-        repository, validation,
-    },
+    events::models::{CreateEventRequest, Event, EventFilters, EventListItem, UpdateEventRequest},
 };
 
 pub async fn list(
@@ -15,13 +21,61 @@ pub async fn list(
     user_id: Uuid,
     filters: EventFilters,
 ) -> Result<Vec<EventListItem>, AppError> {
-    Ok(repository::list(&state.pool, user_id, &filters).await?)
+    let mut client = query_client(state).await?;
+    let reply = client
+        .list_events(QueryListEventsRequest {
+            user_id: user_id.to_string(),
+            search: filters.search.unwrap_or_default(),
+            status: filters.status.unwrap_or_default(),
+            category_id: filters
+                .category_id
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            start_date: filters
+                .start_date
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            end_date: filters
+                .end_date
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+        })
+        .await
+        .map_err(map_status)?
+        .into_inner();
+
+    reply.items.into_iter().map(map_query_event).collect()
 }
 
 pub async fn get(state: &AppState, user_id: Uuid, event_id: Uuid) -> Result<Event, AppError> {
-    repository::find_by_id(&state.pool, user_id, event_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Event not found".to_string()))
+    let mut client = query_client(state).await?;
+    let reply = client
+        .get_event(QueryGetEventRequest {
+            user_id: user_id.to_string(),
+            event_id: event_id.to_string(),
+        })
+        .await
+        .map_err(map_status)?
+        .into_inner();
+
+    let event = reply
+        .event
+        .ok_or_else(|| AppError::Internal("Query response is missing event".to_string()))?;
+
+    Ok(Event {
+        id: parse_uuid(&event.id, "event id")?,
+        user_id: parse_uuid(&event.user_id, "event user id")?,
+        category_id: parse_uuid(&event.category_id, "event category id")?,
+        title: event.title,
+        description: event.description,
+        location: event.location,
+        starts_at: parse_timestamp(&event.starts_at, "event starts_at")?,
+        ends_at: parse_timestamp(&event.ends_at, "event ends_at")?,
+        budget: event.budget,
+        status: event.status,
+        created_at: parse_timestamp(&event.created_at, "event created_at")?,
+        updated_at: parse_timestamp(&event.updated_at, "event updated_at")?,
+    })
 }
 
 pub async fn create(
@@ -29,15 +83,28 @@ pub async fn create(
     user_id: Uuid,
     payload: CreateEventRequest,
 ) -> Result<Event, AppError> {
-    validation::validate_event(
-        &payload.title,
-        &payload.location,
-        payload.starts_at,
-        payload.ends_at,
-        payload.budget,
-    )?;
-    ensure_category_belongs_to_user(state, user_id, payload.category_id).await?;
-    Ok(repository::create(&state.pool, user_id, &payload).await?)
+    let mut client = command_client(state).await?;
+    let reply = client
+        .create_event(CommandCreateEventRequest {
+            user_id: user_id.to_string(),
+            category_id: payload.category_id.to_string(),
+            title: payload.title,
+            description: payload.description,
+            location: payload.location,
+            starts_at: payload.starts_at.to_rfc3339(),
+            ends_at: payload.ends_at.to_rfc3339(),
+            budget: payload.budget,
+            status: payload.status.as_str().to_string(),
+        })
+        .await
+        .map_err(map_status)?
+        .into_inner();
+
+    map_command_event(
+        reply
+            .event
+            .ok_or_else(|| AppError::Internal("Command response is missing event".to_string()))?,
+    )
 }
 
 pub async fn update(
@@ -46,38 +113,114 @@ pub async fn update(
     event_id: Uuid,
     payload: UpdateEventRequest,
 ) -> Result<Event, AppError> {
-    validation::validate_event(
-        &payload.title,
-        &payload.location,
-        payload.starts_at,
-        payload.ends_at,
-        payload.budget,
-    )?;
-    ensure_category_belongs_to_user(state, user_id, payload.category_id).await?;
-    repository::update(&state.pool, user_id, event_id, &payload)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Event not found".to_string()))
+    let mut client = command_client(state).await?;
+    let reply = client
+        .update_event(CommandUpdateEventRequest {
+            user_id: user_id.to_string(),
+            event_id: event_id.to_string(),
+            category_id: payload.category_id.to_string(),
+            title: payload.title,
+            description: payload.description,
+            location: payload.location,
+            starts_at: payload.starts_at.to_rfc3339(),
+            ends_at: payload.ends_at.to_rfc3339(),
+            budget: payload.budget,
+            status: payload.status.as_str().to_string(),
+        })
+        .await
+        .map_err(map_status)?
+        .into_inner();
+
+    map_command_event(
+        reply
+            .event
+            .ok_or_else(|| AppError::Internal("Command response is missing event".to_string()))?,
+    )
 }
 
 pub async fn delete(state: &AppState, user_id: Uuid, event_id: Uuid) -> Result<(), AppError> {
-    let rows = repository::delete(&state.pool, user_id, event_id).await?;
-    if rows == 0 {
-        return Err(AppError::NotFound("Event not found".to_string()));
-    }
+    let mut client = command_client(state).await?;
+    client
+        .delete_event(contracts::event_command::DeleteEventRequest {
+            user_id: user_id.to_string(),
+            event_id: event_id.to_string(),
+        })
+        .await
+        .map_err(map_status)?;
 
     Ok(())
 }
 
-async fn ensure_category_belongs_to_user(
+async fn command_client(
     state: &AppState,
-    user_id: Uuid,
-    category_id: Uuid,
-) -> Result<(), AppError> {
-    categories_repository::find_by_id(&state.pool, user_id, category_id)
-        .await?
-        .ok_or_else(|| {
-            AppError::BadRequest("Category does not belong to the current user".to_string())
-        })?;
+) -> Result<EventCommandServiceClient<tonic::transport::Channel>, AppError> {
+    EventCommandServiceClient::connect(state.config.event_command_service_url.clone())
+        .await
+        .map_err(|error| {
+            AppError::Internal(format!("Event command service is unavailable: {error}"))
+        })
+}
 
-    Ok(())
+async fn query_client(
+    state: &AppState,
+) -> Result<EventQueryServiceClient<tonic::transport::Channel>, AppError> {
+    EventQueryServiceClient::connect(state.config.event_query_service_url.clone())
+        .await
+        .map_err(|error| AppError::Internal(format!("Event query service is unavailable: {error}")))
+}
+
+fn map_query_event(event: contracts::event_query::EventItem) -> Result<EventListItem, AppError> {
+    Ok(EventListItem {
+        id: parse_uuid(&event.id, "event id")?,
+        user_id: parse_uuid(&event.user_id, "event user id")?,
+        category_id: parse_uuid(&event.category_id, "event category id")?,
+        category_name: event.category_name,
+        category_color: event.category_color,
+        title: event.title,
+        description: event.description,
+        location: event.location,
+        starts_at: parse_timestamp(&event.starts_at, "event starts_at")?,
+        ends_at: parse_timestamp(&event.ends_at, "event ends_at")?,
+        budget: event.budget,
+        status: event.status,
+        created_at: parse_timestamp(&event.created_at, "event created_at")?,
+        updated_at: parse_timestamp(&event.updated_at, "event updated_at")?,
+    })
+}
+
+fn map_command_event(event: contracts::event_command::EventRecord) -> Result<Event, AppError> {
+    Ok(Event {
+        id: parse_uuid(&event.id, "event id")?,
+        user_id: parse_uuid(&event.user_id, "event user id")?,
+        category_id: parse_uuid(&event.category_id, "event category id")?,
+        title: event.title,
+        description: event.description,
+        location: event.location,
+        starts_at: parse_timestamp(&event.starts_at, "event starts_at")?,
+        ends_at: parse_timestamp(&event.ends_at, "event ends_at")?,
+        budget: event.budget,
+        status: event.status,
+        created_at: parse_timestamp(&event.created_at, "event created_at")?,
+        updated_at: parse_timestamp(&event.updated_at, "event updated_at")?,
+    })
+}
+
+fn parse_uuid(value: &str, field: &str) -> Result<Uuid, AppError> {
+    Uuid::parse_str(value)
+        .map_err(|_| AppError::Internal(format!("Internal service returned an invalid {field}")))
+}
+
+fn parse_timestamp(value: &str, field: &str) -> Result<DateTime<Utc>, AppError> {
+    DateTime::parse_from_rfc3339(value)
+        .map(|timestamp| timestamp.with_timezone(&Utc))
+        .map_err(|_| AppError::Internal(format!("Internal service returned an invalid {field}")))
+}
+
+fn map_status(status: tonic::Status) -> AppError {
+    match status.code() {
+        tonic::Code::InvalidArgument => AppError::BadRequest(status.message().to_string()),
+        tonic::Code::NotFound => AppError::NotFound(status.message().to_string()),
+        tonic::Code::AlreadyExists => AppError::Conflict(status.message().to_string()),
+        _ => AppError::Internal(format!("Event service error: {}", status.message())),
+    }
 }

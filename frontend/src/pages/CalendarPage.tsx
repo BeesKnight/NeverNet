@@ -5,7 +5,6 @@ import {
   endOfMonth,
   endOfWeek,
   format,
-  isSameDay,
   isSameMonth,
   startOfMonth,
   startOfWeek,
@@ -14,7 +13,7 @@ import {
 import { useMemo, useState } from 'react'
 
 import { apiRequest, buildQueryString } from '../api/client'
-import type { Event } from '../api/types'
+import type { CalendarItem } from '../api/types'
 import { useAuth } from '../features/auth/auth-context'
 
 export function CalendarPage() {
@@ -27,7 +26,7 @@ export function CalendarPage() {
   const eventsQuery = useQuery({
     queryKey: ['calendar-events', session?.user.id, format(monthStart, 'yyyy-MM')],
     queryFn: () =>
-      apiRequest<Event[]>(
+      apiRequest<CalendarItem[]>(
         `/calendar${buildQueryString({
           start_date: format(monthStart, 'yyyy-MM-dd'),
           end_date: format(monthEnd, 'yyyy-MM-dd'),
@@ -82,7 +81,7 @@ export function CalendarPage() {
           ))}
 
           {calendarDays.map((day) => {
-            const dayEvents = events.filter((event) => isSameDay(new Date(event.starts_at), day))
+            const dayEvents = events.filter((event) => event.date === format(day, 'yyyy-MM-dd'))
 
             return (
               <article className={`calendar-cell${isSameMonth(day, currentMonth) ? '' : ' muted-cell'}`} key={day.toISOString()}>
@@ -93,7 +92,7 @@ export function CalendarPage() {
                   {dayEvents.slice(0, 3).map((event) => (
                     <div
                       className="calendar-badge"
-                      key={event.id}
+                      key={event.event_id}
                       style={{ borderLeftColor: event.category_color }}
                     >
                       <span>{format(new Date(event.starts_at), 'HH:mm')}</span>

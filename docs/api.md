@@ -17,14 +17,15 @@ Recommended browser behavior:
 - `credentials: include`
 - CSRF token mechanism for state-changing requests if implemented
 
-## Phase 1 compatibility note
+## Phase 2 compatibility note
 
-The current Phase 1 external API still keeps the existing compatibility envelope and field naming:
+The current external API keeps the existing compatibility envelope and field naming:
 
 - responses are wrapped as `{ "data": ... }`
 - request and response bodies still use existing snake_case fields such as `full_name`, `category_id`, `start_date`, `end_date`, `default_view`, and `report_type`
 - `POST /api/auth/register` and `POST /api/auth/login` set the `eventdesign_session` HttpOnly cookie
 - `GET /api/auth/me` currently returns the authenticated user payload only; settings remain on `GET /api/settings`
+- dashboard, calendar, report summary, and export routes are now served through internal query/report services
 
 ## Route groups
 
@@ -233,15 +234,17 @@ Returns dashboard summary data.
 Response:
 ```json
 {
-  "cards": {
-    "totalEvents": 12,
-    "upcomingEvents": 4,
-    "completedEvents": 6,
-    "cancelledEvents": 2,
-    "totalBudget": 8450
-  },
-  "upcoming": [],
-  "recentActivity": []
+  "data": {
+    "cards": {
+      "total_events": 12,
+      "upcoming_events": 4,
+      "completed_events": 6,
+      "cancelled_events": 2,
+      "total_budget": 8450
+    },
+    "upcoming": [],
+    "recent_activity": []
+  }
 }
 ```
 
@@ -257,17 +260,15 @@ Query params:
 Response:
 ```json
 {
-  "year": 2026,
-  "month": 4,
-  "items": [
+  "data": [
     {
-      "eventId": "uuid",
+      "event_id": "uuid",
       "title": "Frontend Meetup",
       "date": "2026-04-10",
-      "startsAt": "2026-04-10T18:00:00Z",
-      "endsAt": "2026-04-10T21:00:00Z",
+      "starts_at": "2026-04-10T18:00:00Z",
+      "ends_at": "2026-04-10T21:00:00Z",
       "status": "planned",
-      "categoryColor": "#2563eb"
+      "category_color": "#2563eb"
     }
   ]
 }
@@ -289,12 +290,11 @@ Query params may include:
 Response:
 ```json
 {
-  "summary": {
-    "totalEvents": 12,
-    "totalBudget": 8450,
-    "averageBudget": 704.17
-  },
-  "items": []
+  "data": {
+    "total_events": 12,
+    "total_budget": 8450,
+    "events": []
+  }
 }
 ```
 
@@ -320,7 +320,7 @@ Request:
 Response:
 ```json
 {
-  "job": {
+  "data": {
     "id": "uuid",
     "status": "queued"
   }
@@ -336,11 +336,13 @@ Returns one export job status.
 Response:
 ```json
 {
-  "job": {
+  "data": {
     "id": "uuid",
     "status": "completed",
     "format": "pdf",
-    "downloadUrl": "/api/exports/uuid/download"
+    "object_key": "/exports/user-id/uuid.pdf",
+    "content_type": "application/pdf",
+    "finished_at": "2026-04-10T21:05:00Z"
   }
 }
 ```

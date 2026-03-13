@@ -1,4 +1,4 @@
-use std::{env, path::PathBuf};
+use std::env;
 
 use crate::error::AppError;
 
@@ -7,8 +7,10 @@ pub struct Config {
     pub database_url: String,
     pub jwt_secret: String,
     pub port: u16,
-    pub export_dir: PathBuf,
     pub identity_service_url: String,
+    pub event_command_service_url: String,
+    pub event_query_service_url: String,
+    pub report_service_url: String,
     pub frontend_origins: Vec<String>,
     pub auth_cookie_secure: bool,
 }
@@ -23,11 +25,14 @@ impl Config {
             .ok()
             .and_then(|value| value.parse::<u16>().ok())
             .unwrap_or(8080);
-        let export_dir = env::var("EXPORT_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("storage/exports"));
         let identity_service_url = env::var("IDENTITY_SERVICE_URL")
             .unwrap_or_else(|_| "http://127.0.0.1:50051".to_string());
+        let event_command_service_url = env::var("EVENT_COMMAND_SERVICE_URL")
+            .unwrap_or_else(|_| "http://127.0.0.1:50052".to_string());
+        let event_query_service_url = env::var("EVENT_QUERY_SERVICE_URL")
+            .unwrap_or_else(|_| "http://127.0.0.1:50053".to_string());
+        let report_service_url =
+            env::var("REPORT_SERVICE_URL").unwrap_or_else(|_| "http://127.0.0.1:50054".to_string());
         let frontend_origins = env::var("FRONTEND_ORIGINS")
             .unwrap_or_else(|_| "http://localhost:3000,http://localhost:5173".to_string())
             .split(',')
@@ -44,8 +49,10 @@ impl Config {
             database_url,
             jwt_secret,
             port,
-            export_dir,
             identity_service_url,
+            event_command_service_url,
+            event_query_service_url,
+            report_service_url,
             frontend_origins,
             auth_cookie_secure,
         })

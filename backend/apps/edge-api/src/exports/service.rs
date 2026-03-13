@@ -1,5 +1,3 @@
-use std::{fs::File, io::BufWriter, path::PathBuf};
-
 use axum::{
     body::Body,
     http::{
@@ -8,33 +6,48 @@ use axum::{
     },
     response::Response,
 };
-use printpdf::{BuiltinFont, Mm, PdfDocument};
-use rust_xlsxwriter::Workbook;
-use tokio::fs;
+use contracts::reporting::report_service_client::ReportServiceClient;
+use contracts::reporting::{
+    CreateExportRequest as ReportCreateExportRequest, DownloadExportRequest, GetExportRequest,
+    ListExportsRequest,
+};
 use uuid::Uuid;
 
 use crate::{
     app_state::AppState,
     error::AppError,
-    events::models::EventFilters,
-    exports::{
-        models::{CreateExportRequest, ExportJob},
-        repository,
-    },
-    reports::{models::ReportSummary, service as reports_service},
+    exports::models::{CreateExportRequest, ExportJob},
 };
 
-const ALLOWED_FORMATS: [&str; 2] = ["pdf", "xlsx"];
-const ALLOWED_REPORT_TYPES: [&str; 1] = ["summary"];
-
 pub async fn list(state: &AppState, user_id: Uuid) -> Result<Vec<ExportJob>, AppError> {
-    Ok(repository::list(&state.pool, user_id).await?)
+    let mut client = report_client(state).await?;
+    let reply = client
+        .list_exports(ListExportsRequest {
+            user_id: user_id.to_string(),
+        })
+        .await
+        .map_err(map_status)?
+        .into_inner();
+
+    reply.items.into_iter().map(map_export_job).collect()
 }
 
 pub async fn get(state: &AppState, user_id: Uuid, export_id: Uuid) -> Result<ExportJob, AppError> {
-    repository::find_by_id(&state.pool, user_id, export_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Export job not found".to_string()))
+    let mut client = report_client(state).await?;
+    let reply = client
+        .get_export(GetExportRequest {
+            user_id: user_id.to_string(),
+            export_id: export_id.to_string(),
+        })
+        .await
+        .map_err(map_status)?
+        .into_inner();
+
+    map_export_job(
+        reply.job.ok_or_else(|| {
+            AppError::Internal("Report response is missing export job".to_string())
+        })?,
+    )
 }
 
 pub async fn create(
@@ -42,33 +55,25 @@ pub async fn create(
     user_id: Uuid,
     payload: CreateExportRequest,
 ) -> Result<ExportJob, AppError> {
-    let report_type = payload.report_type.trim().to_lowercase();
-    let format = payload.format.trim().to_lowercase();
-
-    if !ALLOWED_REPORT_TYPES.contains(&report_type.as_str()) {
-        return Err(AppError::BadRequest(
-            "Report type must be summary".to_string(),
-        ));
-    }
-
-    if !ALLOWED_FORMATS.contains(&format.as_str()) {
-        return Err(AppError::BadRequest(
-            "Export format must be either pdf or xlsx".to_string(),
-        ));
-    }
-
-    let filters = serde_json::to_value(&payload.filters)
+    let mut client = report_client(state).await?;
+    let filters_json = serde_json::to_string(&payload.filters)
         .map_err(|error| AppError::Internal(error.to_string()))?;
-    let job = repository::create(&state.pool, user_id, &report_type, &format, filters).await?;
+    let reply = client
+        .create_export(ReportCreateExportRequest {
+            user_id: user_id.to_string(),
+            report_type: payload.report_type,
+            format: payload.format,
+            filters_json,
+        })
+        .await
+        .map_err(map_status)?
+        .into_inner();
 
-    let state_clone = state.clone();
-    tokio::spawn(async move {
-        if let Err(error) = process_export_job(state_clone, job.id).await {
-            tracing::error!("export job {} failed: {}", job.id, error);
-        }
-    });
-
-    Ok(job)
+    map_export_job(
+        reply.job.ok_or_else(|| {
+            AppError::Internal("Report response is missing export job".to_string())
+        })?,
+    )
 }
 
 pub async fn download(
@@ -76,233 +81,91 @@ pub async fn download(
     user_id: Uuid,
     export_id: Uuid,
 ) -> Result<Response, AppError> {
-    let job = repository::find_by_id(&state.pool, user_id, export_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Export job not found".to_string()))?;
-
-    if job.status != "completed" {
-        return Err(AppError::BadRequest(
-            "Export file is not ready yet".to_string(),
-        ));
-    }
-
-    let file_path = job
-        .file_path
-        .clone()
-        .ok_or_else(|| AppError::Internal("Completed export job is missing a file".to_string()))?;
-    let bytes = fs::read(&file_path).await?;
-    let content_type = if job.format == "pdf" {
-        "application/pdf"
-    } else {
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    };
-    let file_name = format!("event-report-{}.{}", job.id, job.format);
+    let mut client = report_client(state).await?;
+    let reply = client
+        .download_export(DownloadExportRequest {
+            user_id: user_id.to_string(),
+            export_id: export_id.to_string(),
+        })
+        .await
+        .map_err(map_status)?
+        .into_inner();
 
     Ok(Response::builder()
         .status(StatusCode::OK)
-        .header(CONTENT_TYPE, HeaderValue::from_static(content_type))
         .header(
-            CONTENT_DISPOSITION,
-            HeaderValue::from_str(&format!("attachment; filename=\"{file_name}\""))
+            CONTENT_TYPE,
+            HeaderValue::from_str(&reply.content_type)
                 .map_err(|error| AppError::Internal(error.to_string()))?,
         )
-        .body(Body::from(bytes))
+        .header(
+            CONTENT_DISPOSITION,
+            HeaderValue::from_str(&format!("attachment; filename=\"{}\"", reply.file_name))
+                .map_err(|error| AppError::Internal(error.to_string()))?,
+        )
+        .body(Body::from(reply.bytes))
         .map_err(AppError::from)?)
 }
 
-pub async fn resume_pending_jobs(state: AppState) {
-    match repository::pending(&state.pool).await {
-        Ok(jobs) => {
-            for job in jobs {
-                let state_clone = state.clone();
-                tokio::spawn(async move {
-                    if let Err(error) = process_export_job(state_clone, job.id).await {
-                        tracing::error!("failed to resume export {}: {}", job.id, error);
-                    }
-                });
-            }
-        }
-        Err(error) => tracing::error!("could not inspect pending export jobs: {}", error),
-    }
-}
-
-pub async fn process_export_job(state: AppState, job_id: Uuid) -> Result<(), AppError> {
-    let job = repository::find_by_job_id(&state.pool, job_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Export job not found".to_string()))?;
-
-    repository::set_processing(&state.pool, job.id).await?;
-    let result = async {
-        let filters: EventFilters = serde_json::from_value(job.filters.clone())
-            .map_err(|error| AppError::Internal(error.to_string()))?;
-        let report = reports_service::generate_summary(&state, job.user_id, filters).await?;
-        let file_path = build_export_file(&state, &job, &report).await?;
-        repository::complete(&state.pool, job.id, &file_path.to_string_lossy()).await?;
-        Ok::<(), AppError>(())
-    }
-    .await;
-
-    if let Err(error) = result {
-        repository::fail(&state.pool, job.id, &error.to_string()).await?;
-        return Err(error);
-    }
-
-    Ok(())
-}
-
-async fn build_export_file(
+async fn report_client(
     state: &AppState,
-    job: &ExportJob,
-    report: &ReportSummary,
-) -> Result<PathBuf, AppError> {
-    let user_dir = state.config.export_dir.join(job.user_id.to_string());
-    fs::create_dir_all(&user_dir).await?;
+) -> Result<ReportServiceClient<tonic::transport::Channel>, AppError> {
+    ReportServiceClient::connect(state.config.report_service_url.clone())
+        .await
+        .map_err(|error| AppError::Internal(format!("Report service is unavailable: {error}")))
+}
 
-    let extension = if job.format == "pdf" { "pdf" } else { "xlsx" };
-    let path = user_dir.join(format!("{}.{}", job.id, extension));
+fn map_export_job(job: contracts::reporting::ExportJob) -> Result<ExportJob, AppError> {
+    Ok(ExportJob {
+        id: parse_uuid(&job.id, "export id")?,
+        user_id: parse_uuid(&job.user_id, "export user id")?,
+        report_type: job.report_type,
+        format: job.format,
+        status: job.status,
+        filters: serde_json::from_str(&job.filters_json).map_err(|_| {
+            AppError::Internal("Internal service returned invalid export filters".to_string())
+        })?,
+        object_key: optional_string(job.object_key),
+        content_type: optional_string(job.content_type),
+        error_message: optional_string(job.error_message),
+        created_at: parse_timestamp(&job.created_at, "export created_at")?,
+        started_at: optional_timestamp(&job.started_at, "export started_at")?,
+        updated_at: parse_timestamp(&job.updated_at, "export updated_at")?,
+        finished_at: optional_timestamp(&job.finished_at, "export finished_at")?,
+    })
+}
 
-    if job.format == "pdf" {
-        build_pdf(&path, report)?;
+fn optional_string(value: String) -> Option<String> {
+    if value.is_empty() { None } else { Some(value) }
+}
+
+fn parse_uuid(value: &str, field: &str) -> Result<Uuid, AppError> {
+    Uuid::parse_str(value)
+        .map_err(|_| AppError::Internal(format!("Internal service returned an invalid {field}")))
+}
+
+fn parse_timestamp(value: &str, field: &str) -> Result<chrono::DateTime<chrono::Utc>, AppError> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .map(|timestamp| timestamp.with_timezone(&chrono::Utc))
+        .map_err(|_| AppError::Internal(format!("Internal service returned an invalid {field}")))
+}
+
+fn optional_timestamp(
+    value: &str,
+    field: &str,
+) -> Result<Option<chrono::DateTime<chrono::Utc>>, AppError> {
+    if value.is_empty() {
+        Ok(None)
     } else {
-        build_xlsx(&path, report)?;
+        parse_timestamp(value, field).map(Some)
     }
-
-    Ok(path)
 }
 
-fn build_pdf(path: &PathBuf, report: &ReportSummary) -> Result<(), AppError> {
-    let (document, first_page, first_layer) =
-        PdfDocument::new("EventDesign event report", Mm(210.0), Mm(297.0), "Layer 1");
-    let font = document
-        .add_builtin_font(BuiltinFont::Helvetica)
-        .map_err(|error| AppError::Internal(error.to_string()))?;
-
-    let mut y = 285.0;
-    let mut page = first_page;
-    let mut layer = first_layer;
-    let mut current_layer = document.get_page(page).get_layer(layer);
-    let mut page_number = 1;
-
-    for line in pdf_lines(report) {
-        if y < 14.0 {
-            page_number += 1;
-            let (next_page, next_layer) =
-                document.add_page(Mm(210.0), Mm(297.0), format!("Layer {page_number}"));
-            page = next_page;
-            layer = next_layer;
-            current_layer = document.get_page(page).get_layer(layer);
-            y = 285.0;
-        }
-
-        current_layer.use_text(line, 11.0, Mm(12.0), Mm(y), &font);
-        y -= 7.0;
+fn map_status(status: tonic::Status) -> AppError {
+    match status.code() {
+        tonic::Code::InvalidArgument => AppError::BadRequest(status.message().to_string()),
+        tonic::Code::NotFound => AppError::NotFound(status.message().to_string()),
+        tonic::Code::FailedPrecondition => AppError::BadRequest(status.message().to_string()),
+        _ => AppError::Internal(format!("Report service error: {}", status.message())),
     }
-
-    let mut writer = BufWriter::new(File::create(path)?);
-    document
-        .save(&mut writer)
-        .map_err(|error| AppError::Internal(error.to_string()))?;
-    Ok(())
-}
-
-fn pdf_lines(report: &ReportSummary) -> Vec<String> {
-    let mut lines = vec![
-        "EventDesign Event Report".to_string(),
-        format!("Total events: {}", report.total_events),
-        format!("Total budget: {:.2}", report.total_budget),
-        format!(
-            "Period: {} - {}",
-            report
-                .period_start
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "Any".to_string()),
-            report
-                .period_end
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "Any".to_string())
-        ),
-        String::new(),
-        "Events".to_string(),
-    ];
-
-    for event in &report.events {
-        lines.push(format!(
-            "{} | {} | {} | {}",
-            event.starts_at.format("%Y-%m-%d %H:%M"),
-            event.title,
-            event.category_name,
-            event.status
-        ));
-        lines.push(format!(
-            "Location: {} | Ends: {} | Budget: {:.2}",
-            if event.location.trim().is_empty() {
-                "Not specified"
-            } else {
-                event.location.as_str()
-            },
-            event.ends_at.format("%Y-%m-%d %H:%M"),
-            event.budget
-        ));
-        lines.push(String::new());
-    }
-
-    lines
-}
-
-fn build_xlsx(path: &PathBuf, report: &ReportSummary) -> Result<(), AppError> {
-    let mut workbook = Workbook::new();
-    let worksheet = workbook.add_worksheet();
-    worksheet
-        .write_string(0, 0, "Title")
-        .map_err(map_xlsx_error)?;
-    worksheet
-        .write_string(0, 1, "Category")
-        .map_err(map_xlsx_error)?;
-    worksheet
-        .write_string(0, 2, "Location")
-        .map_err(map_xlsx_error)?;
-    worksheet
-        .write_string(0, 3, "Status")
-        .map_err(map_xlsx_error)?;
-    worksheet
-        .write_string(0, 4, "Starts At")
-        .map_err(map_xlsx_error)?;
-    worksheet
-        .write_string(0, 5, "Ends At")
-        .map_err(map_xlsx_error)?;
-    worksheet
-        .write_string(0, 6, "Budget")
-        .map_err(map_xlsx_error)?;
-
-    for (index, event) in report.events.iter().enumerate() {
-        let row = (index + 1) as u32;
-        worksheet
-            .write_string(row, 0, &event.title)
-            .map_err(map_xlsx_error)?;
-        worksheet
-            .write_string(row, 1, &event.category_name)
-            .map_err(map_xlsx_error)?;
-        worksheet
-            .write_string(row, 2, &event.location)
-            .map_err(map_xlsx_error)?;
-        worksheet
-            .write_string(row, 3, &event.status)
-            .map_err(map_xlsx_error)?;
-        worksheet
-            .write_string(row, 4, event.starts_at.format("%Y-%m-%d %H:%M").to_string())
-            .map_err(map_xlsx_error)?;
-        worksheet
-            .write_string(row, 5, event.ends_at.format("%Y-%m-%d %H:%M").to_string())
-            .map_err(map_xlsx_error)?;
-        worksheet
-            .write_number(row, 6, event.budget)
-            .map_err(map_xlsx_error)?;
-    }
-
-    workbook.save(path).map_err(map_xlsx_error)?;
-    Ok(())
-}
-
-fn map_xlsx_error(error: rust_xlsxwriter::XlsxError) -> AppError {
-    AppError::Internal(error.to_string())
 }

@@ -157,6 +157,7 @@ Fields:
 - status
 - filters_json
 - object_key
+- content_type
 - error_message
 - created_at
 - started_at

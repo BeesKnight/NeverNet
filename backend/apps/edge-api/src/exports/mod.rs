@@ -1,6 +1,5 @@
 mod handlers;
 pub mod models;
-mod repository;
 pub mod service;
 
 use axum::{Router, routing::get};

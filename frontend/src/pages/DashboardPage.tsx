@@ -2,21 +2,15 @@ import { useQuery } from '@tanstack/react-query'
 import { format } from 'date-fns'
 
 import { apiRequest } from '../api/client'
-import type { Event, ExportJob, ReportSummary } from '../api/types'
+import type { DashboardResponse, ExportJob } from '../api/types'
 import { useAuth } from '../features/auth/auth-context'
 
 export function DashboardPage() {
   const { session } = useAuth()
 
-  const eventsQuery = useQuery({
-    queryKey: ['events', session?.user.id, 'dashboard'],
-    queryFn: () => apiRequest<Event[]>('/events'),
-    enabled: Boolean(session?.user.id),
-  })
-
-  const reportsQuery = useQuery({
-    queryKey: ['reports', session?.user.id, 'dashboard'],
-    queryFn: () => apiRequest<ReportSummary>('/reports/summary'),
+  const dashboardQuery = useQuery({
+    queryKey: ['dashboard', session?.user.id],
+    queryFn: () => apiRequest<DashboardResponse>('/dashboard'),
     enabled: Boolean(session?.user.id),
   })
 
@@ -26,16 +20,11 @@ export function DashboardPage() {
     enabled: Boolean(session?.user.id),
   })
 
-  const events = eventsQuery.data ?? []
+  const dashboard = dashboardQuery.data
   const exports = exportsQuery.data ?? []
-  const report = reportsQuery.data
-  const now = new Date()
-  const upcomingEvents = events.filter((event) => new Date(event.starts_at) >= now && event.status !== 'cancelled')
-  const completedEvents = events.filter((event) => event.status === 'completed')
-  const cancelledEvents = events.filter((event) => event.status === 'cancelled')
-  const recentActivity = [...events]
-    .sort((left, right) => new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime())
-    .slice(0, 5)
+  const upcomingEvents = dashboard?.upcoming ?? []
+  const recentActivity = dashboard?.recent_activity ?? []
+  const cards = dashboard?.cards
 
   return (
     <div className="page-shell">
@@ -52,22 +41,22 @@ export function DashboardPage() {
       <section className="stats-grid">
         <article className="stat-card">
           <p className="eyebrow">Total events</p>
-          <strong>{report?.total_events ?? 0}</strong>
+          <strong>{cards?.total_events ?? 0}</strong>
           <span>Tracked across all statuses</span>
         </article>
         <article className="stat-card">
           <p className="eyebrow">Upcoming</p>
-          <strong>{upcomingEvents.length}</strong>
+          <strong>{cards?.upcoming_events ?? 0}</strong>
           <span>Future events still on the board</span>
         </article>
         <article className="stat-card">
           <p className="eyebrow">Completed</p>
-          <strong>{completedEvents.length}</strong>
+          <strong>{cards?.completed_events ?? 0}</strong>
           <span>Events marked as delivered</span>
         </article>
         <article className="stat-card">
           <p className="eyebrow">Cancelled</p>
-          <strong>{cancelledEvents.length}</strong>
+          <strong>{cards?.cancelled_events ?? 0}</strong>
           <span>Events removed from execution</span>
         </article>
       </section>
@@ -111,10 +100,10 @@ export function DashboardPage() {
                 <div>
                   <strong>{event.title}</strong>
                   <p className="muted">
-                    Updated {format(new Date(event.updated_at), 'MMM d, yyyy HH:mm')} | {event.location}
+                    {event.action.replace('_', ' ')} | {format(new Date(event.occurred_at), 'MMM d, yyyy HH:mm')}
                   </p>
                 </div>
-                <span className={`status-pill ${event.status}`}>{event.status.replace('_', ' ')}</span>
+                <span className="status-pill planned">{event.entity_type}</span>
               </div>
             ))}
             {!recentActivity.length ? <div className="empty-state">No recent activity yet.</div> : null}

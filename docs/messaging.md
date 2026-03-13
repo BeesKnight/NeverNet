@@ -10,15 +10,21 @@ The architecture uses:
 - NATS JetStream for event transport
 - worker consumers for projections, exports, and side effects
 
-## Phase 1 note
+## Phase 2 note
 
-The repository now starts Redis, NATS JetStream, MinIO, and a worker skeleton through Docker Compose.
+The repository now runs the async backbone through the real `worker` app.
 
-What is not migrated yet:
+Implemented now:
 
-- category, event, report, and export business flows still execute inside `edge-api`
-- outbox publishing and worker consumers are still the target Phase 2 direction
-- export files are still produced through the compatibility path and stored on shared local disk
+- category and event mutations insert outbox rows in the same transaction as the write
+- worker relays unpublished outbox rows into NATS JetStream
+- projection consumers update read-model tables and invalidate Redis dashboard cache
+- export jobs are created by `report-svc`, executed by workers, and stored in MinIO
+
+Still intentionally synchronous:
+
+- authentication
+- settings reads and writes
 
 ## Why this exists
 
@@ -132,6 +138,12 @@ Recommended behavior:
 - do not lose export jobs if a worker crashes
 - ensure idempotent projection updates where possible
 
+Current implementation details:
+
+- outbox relay retries unpublished rows on each polling cycle and records `last_error`
+- projection consumer deduplicates with `processed_messages`
+- export worker uses Redis locks plus job status transitions to avoid duplicate processing
+
 ## Idempotency guidance
 
 Workers may process the same logical event more than once.
@@ -167,11 +179,11 @@ Avoid manual invalidation scattered across unrelated codepaths.
 8. export job is marked completed or failed
 9. frontend polls or refreshes job status
 
-Phase 1 compatibility:
+Current flow:
 
-- `edge-api` still creates the export job directly
-- the current implementation still writes the artifact to local shared storage
-- `report-svc` and the worker remain the target flow for the next phase
+- `edge-api` forwards export creation and lookup to `report-svc`
+- workers generate the file asynchronously from `report_projection`
+- artifacts are uploaded to MinIO and downloaded back through `report-svc`
 
 ## What should not go through async flow
 
