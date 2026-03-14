@@ -179,3 +179,58 @@ impl ReportSummary {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use chrono::TimeZone;
+
+    use super::*;
+
+    fn event_row(
+        category_id: Uuid,
+        category_name: &str,
+        status: &str,
+        budget: f64,
+    ) -> EventItemRow {
+        EventItemRow {
+            id: Uuid::new_v4(),
+            user_id: Uuid::new_v4(),
+            category_id,
+            category_name: category_name.to_string(),
+            category_color: "#0f766e".to_string(),
+            title: "Demo event".to_string(),
+            description: "Demo".to_string(),
+            location: "Room 301".to_string(),
+            starts_at: Utc.with_ymd_and_hms(2026, 3, 14, 10, 0, 0).unwrap(),
+            ends_at: Utc.with_ymd_and_hms(2026, 3, 14, 12, 0, 0).unwrap(),
+            budget,
+            status: status.to_string(),
+            created_at: Utc.with_ymd_and_hms(2026, 3, 13, 10, 0, 0).unwrap(),
+            updated_at: Utc.with_ymd_and_hms(2026, 3, 13, 10, 0, 0).unwrap(),
+        }
+    }
+
+    #[test]
+    fn aggregates_report_summary_by_category_and_status() {
+        let conference = Uuid::new_v4();
+        let meetup = Uuid::new_v4();
+        let summary = ReportSummary::from_events(
+            vec![
+                event_row(conference, "Conference", "planned", 1200.0),
+                event_row(conference, "Conference", "completed", 500.0),
+                event_row(meetup, "Meetup", "planned", 800.0),
+            ],
+            Some(NaiveDate::from_ymd_opt(2026, 3, 1).expect("valid start")),
+            Some(NaiveDate::from_ymd_opt(2026, 3, 31).expect("valid end")),
+        );
+
+        assert_eq!(summary.total_events, 3);
+        assert_eq!(summary.total_budget, 2500.0);
+        assert_eq!(summary.by_category[0].category_name, "Conference");
+        assert_eq!(summary.by_category[0].event_count, 2);
+        assert_eq!(summary.by_status[0].status, "planned");
+        assert_eq!(summary.by_status[0].event_count, 2);
+        assert_eq!(summary.period_start, NaiveDate::from_ymd_opt(2026, 3, 1));
+        assert_eq!(summary.period_end, NaiveDate::from_ymd_opt(2026, 3, 31));
+    }
+}

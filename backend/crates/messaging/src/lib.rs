@@ -51,3 +51,27 @@ pub mod subjects {
     pub const EXPORT_COMPLETED: &str = "eventdesign.export.completed";
     pub const EXPORT_FAILED: &str = "eventdesign.export.failed";
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_default_messaging_config() {
+        unsafe {
+            std::env::remove_var("NATS_URL");
+        }
+
+        let config = MessagingConfig::from_env();
+
+        assert_eq!(config.nats_url, DEFAULT_NATS_URL);
+    }
+
+    #[test]
+    fn builds_subject_name_from_event_type() {
+        assert_eq!(
+            subject_for_event_type("category.created"),
+            "eventdesign.category.created"
+        );
+    }
+}

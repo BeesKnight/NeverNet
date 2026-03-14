@@ -132,3 +132,59 @@ fn map_identity_status(status: tonic::Status) -> AppError {
         _ => AppError::Internal(format!("Identity service error: {}", status.message())),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use chrono::TimeZone;
+
+    use super::*;
+
+    fn sample_identity_user() -> contracts::identity::User {
+        contracts::identity::User {
+            id: Uuid::new_v4().to_string(),
+            email: "demo@eventdesign.local".to_string(),
+            full_name: "Demo User".to_string(),
+            created_at: Utc
+                .with_ymd_and_hms(2026, 3, 13, 10, 0, 0)
+                .unwrap()
+                .to_rfc3339(),
+        }
+    }
+
+    #[test]
+    fn maps_identity_user_payload() {
+        let user = map_identity_user(Some(sample_identity_user())).expect("user should map");
+
+        assert_eq!(user.email, "demo@eventdesign.local");
+        assert_eq!(user.full_name, "Demo User");
+    }
+
+    #[test]
+    fn rejects_invalid_identity_user_payload() {
+        let mut user = sample_identity_user();
+        user.id = "invalid".to_string();
+
+        assert!(map_identity_user(None).is_err());
+        assert!(map_identity_user(Some(user)).is_err());
+    }
+
+    #[test]
+    fn maps_identity_status_codes() {
+        assert!(matches!(
+            map_identity_status(tonic::Status::invalid_argument("bad")),
+            AppError::BadRequest(_)
+        ));
+        assert!(matches!(
+            map_identity_status(tonic::Status::unauthenticated("denied")),
+            AppError::Unauthorized(_)
+        ));
+        assert!(matches!(
+            map_identity_status(tonic::Status::already_exists("exists")),
+            AppError::Conflict(_)
+        ));
+        assert!(matches!(
+            map_identity_status(tonic::Status::internal("oops")),
+            AppError::Internal(_)
+        ));
+    }
+}

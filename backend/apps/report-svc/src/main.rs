@@ -314,3 +314,80 @@ fn status_from_error(error: AppError) -> Status {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use chrono::{TimeZone, Utc};
+
+    use super::*;
+
+    fn sample_job() -> ExportJob {
+        ExportJob {
+            id: Uuid::new_v4(),
+            user_id: Uuid::new_v4(),
+            report_type: "summary".to_string(),
+            format: "pdf".to_string(),
+            status: "queued".to_string(),
+            filters: serde_json::json!({ "status": "planned" }),
+            object_key: Some("exports/report.pdf".to_string()),
+            content_type: Some("application/pdf".to_string()),
+            error_message: None,
+            created_at: Utc.with_ymd_and_hms(2026, 3, 13, 10, 0, 0).unwrap(),
+            started_at: None,
+            updated_at: Utc.with_ymd_and_hms(2026, 3, 13, 10, 5, 0).unwrap(),
+            finished_at: None,
+        }
+    }
+
+    #[test]
+    fn validates_export_inputs() {
+        assert!(validate_report_type("summary").is_ok());
+        assert!(validate_format("pdf").is_ok());
+        assert!(validate_format("xlsx").is_ok());
+        assert!(validate_report_type("custom").is_err());
+        assert!(validate_format("csv").is_err());
+    }
+
+    #[test]
+    fn maps_export_job_and_defaults_content_type() {
+        let job = sample_job();
+        let payload = snapshot_export_payload(&job);
+        let grpc_job = map_export_job(job);
+
+        assert_eq!(payload.report_type, "summary");
+        assert_eq!(grpc_job.report_type, "summary");
+        assert_eq!(grpc_job.content_type, "application/pdf");
+        assert_eq!(
+            default_content_type("xlsx"),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        );
+    }
+
+    #[test]
+    fn parses_uuid_and_filters_json() {
+        let id = Uuid::new_v4();
+
+        assert_eq!(
+            parse_uuid(&id.to_string(), "user_id").expect("uuid should parse"),
+            id
+        );
+        assert_eq!(
+            parse_filters_json(r#"{"status":"planned"}"#).expect("json should parse"),
+            serde_json::json!({ "status": "planned" })
+        );
+        assert!(parse_uuid("not-a-uuid", "user_id").is_err());
+        assert!(parse_filters_json("{").is_err());
+    }
+
+    #[test]
+    fn maps_app_errors_to_grpc_status() {
+        assert_eq!(
+            status_from_error(AppError::Config("bad config".to_string())).code(),
+            tonic::Code::Internal
+        );
+        assert_eq!(
+            status_from_error(AppError::Database(sqlx::Error::RowNotFound)).code(),
+            tonic::Code::Internal
+        );
+    }
+}

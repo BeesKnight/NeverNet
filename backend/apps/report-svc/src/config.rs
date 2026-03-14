@@ -44,3 +44,61 @@ impl Config {
 fn required(key: &str) -> Result<String, AppError> {
     env::var(key).map_err(|_| AppError::Config(format!("{key} is required")))
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Mutex, OnceLock};
+
+    use super::*;
+
+    static ENV_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
+
+    #[test]
+    fn reads_default_storage_configuration() {
+        with_env(
+            &[
+                ("GRPC_PORT", None),
+                ("METRICS_PORT", None),
+                ("MINIO_ENDPOINT", None),
+                ("MINIO_BUCKET", None),
+                ("MINIO_ACCESS_KEY", None),
+                ("MINIO_SECRET_KEY", None),
+                ("MINIO_REGION", None),
+            ],
+            || {
+                let config = Config::from_env().expect("config should be valid");
+                assert_eq!(config.grpc_port, 50054);
+                assert_eq!(config.metrics_port, 9104);
+                assert_eq!(config.minio_bucket, "eventdesign-exports");
+                assert_eq!(config.minio_region, "us-east-1");
+            },
+        );
+    }
+
+    fn with_env(vars: &[(&str, Option<&str>)], test: impl FnOnce()) {
+        let _guard = ENV_MUTEX
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("env mutex poisoned");
+        let saved: Vec<(&str, Option<String>)> = vars
+            .iter()
+            .map(|(key, _)| (*key, env::var(key).ok()))
+            .collect();
+
+        for (key, value) in vars {
+            match value {
+                Some(value) => unsafe { env::set_var(key, value) },
+                None => unsafe { env::remove_var(key) },
+            }
+        }
+
+        test();
+
+        for (key, value) in saved {
+            match value {
+                Some(value) => unsafe { env::set_var(key, value) },
+                None => unsafe { env::remove_var(key) },
+            }
+        }
+    }
+}

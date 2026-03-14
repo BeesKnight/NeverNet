@@ -102,3 +102,53 @@ fn map_status(status: tonic::Status) -> AppError {
         _ => AppError::Internal(format!("Identity service error: {}", status.message())),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use chrono::TimeZone;
+
+    use super::*;
+
+    #[test]
+    fn maps_settings_payload() {
+        let user_id = Uuid::new_v4();
+        let settings = map_settings(contracts::identity::UiSettings {
+            user_id: user_id.to_string(),
+            theme: "system".to_string(),
+            accent_color: "#b6532f".to_string(),
+            default_view: "dashboard".to_string(),
+            created_at: Utc
+                .with_ymd_and_hms(2026, 3, 13, 10, 0, 0)
+                .unwrap()
+                .to_rfc3339(),
+            updated_at: Utc
+                .with_ymd_and_hms(2026, 3, 13, 10, 5, 0)
+                .unwrap()
+                .to_rfc3339(),
+        })
+        .expect("settings should map");
+
+        assert_eq!(settings.user_id, user_id);
+        assert_eq!(settings.theme, "system");
+    }
+
+    #[test]
+    fn maps_settings_status_codes() {
+        assert!(matches!(
+            map_status(tonic::Status::invalid_argument("bad")),
+            AppError::BadRequest(_)
+        ));
+        assert!(matches!(
+            map_status(tonic::Status::not_found("missing")),
+            AppError::NotFound(_)
+        ));
+        assert!(matches!(
+            map_status(tonic::Status::unauthenticated("denied")),
+            AppError::Unauthorized(_)
+        ));
+        assert!(matches!(
+            map_status(tonic::Status::internal("oops")),
+            AppError::Internal(_)
+        ));
+    }
+}

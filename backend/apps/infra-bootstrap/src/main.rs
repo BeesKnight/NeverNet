@@ -235,3 +235,108 @@ async fn ensure_bucket(bucket: &Bucket, bucket_name: &str) -> Result<(), Bootstr
         "MinIO bucket {bucket_name} is not reachable after retries"
     )))
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Mutex, OnceLock};
+
+    use super::*;
+
+    static ENV_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
+
+    fn with_env(vars: &[(&str, Option<&str>)], test: impl FnOnce()) {
+        let _guard = ENV_MUTEX
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("env mutex poisoned");
+        let saved: Vec<(&str, Option<String>)> = vars
+            .iter()
+            .map(|(key, _)| (*key, std::env::var(key).ok()))
+            .collect();
+
+        for (key, value) in vars {
+            match value {
+                Some(value) => unsafe { std::env::set_var(key, value) },
+                None => unsafe { std::env::remove_var(key) },
+            }
+        }
+
+        test();
+
+        for (key, value) in saved {
+            match value {
+                Some(value) => unsafe { std::env::set_var(key, value) },
+                None => unsafe { std::env::remove_var(key) },
+            }
+        }
+    }
+
+    fn config() -> Config {
+        Config {
+            messaging: MessagingConfig {
+                nats_url: "nats://127.0.0.1:4222".to_string(),
+            },
+            minio_endpoint: "http://127.0.0.1:9000".to_string(),
+            minio_bucket: "eventdesign-exports".to_string(),
+            minio_access_key: "eventdesign".to_string(),
+            minio_secret_key: "eventdesign123".to_string(),
+            minio_region: "us-east-1".to_string(),
+        }
+    }
+
+    #[test]
+    fn reads_default_bootstrap_configuration() {
+        with_env(
+            &[
+                ("MINIO_ENDPOINT", None),
+                ("MINIO_BUCKET", None),
+                ("MINIO_ACCESS_KEY", None),
+                ("MINIO_SECRET_KEY", None),
+                ("MINIO_REGION", None),
+                ("NATS_URL", None),
+            ],
+            || {
+                let config = Config::from_env();
+
+                assert_eq!(config.messaging.nats_url, "nats://localhost:4222");
+                assert_eq!(config.minio_endpoint, "http://127.0.0.1:9000");
+                assert_eq!(config.minio_bucket, "eventdesign-exports");
+                assert_eq!(config.minio_region, "us-east-1");
+            },
+        );
+    }
+
+    #[test]
+    fn builds_storage_bucket_from_config() {
+        let bucket = build_storage_bucket(&config()).expect("bucket client should build");
+
+        assert_eq!(bucket.region().endpoint(), "http://127.0.0.1:9000");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn connect_nats_reports_retries_as_internal_error() {
+        let error = connect_nats("nats://127.0.0.1:1")
+            .await
+            .expect_err("unreachable NATS should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("Could not connect to NATS after retries")
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn ensure_bucket_reports_unreachable_storage() {
+        let bucket = build_storage_bucket(&Config {
+            minio_endpoint: "http://127.0.0.1:1".to_string(),
+            ..config()
+        })
+        .expect("bucket client should build");
+        let error = ensure_bucket(&bucket, "eventdesign-exports")
+            .await
+            .expect_err("unreachable bucket should fail");
+
+        assert!(error.to_string().contains("is not reachable after retries"));
+    }
+}

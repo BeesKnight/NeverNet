@@ -89,7 +89,37 @@ fn validate_accent_color(value: &str) -> Result<String, AppError> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use sqlx::PgPool;
+
     use super::*;
+    use crate::{app_state::AppState, config::Config};
+
+    async fn insert_user(pool: &PgPool, user_id: Uuid) {
+        sqlx::query(
+            r#"
+            INSERT INTO users (id, email, password_hash, full_name)
+            VALUES ($1, 'service-settings@eventdesign.local', 'hash', 'Service Settings User')
+            "#,
+        )
+        .bind(user_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    fn state(pool: PgPool) -> AppState {
+        AppState::new(
+            pool,
+            Arc::new(Config {
+                database_url: "postgres://postgres:postgres@localhost:55432/postgres".to_string(),
+                jwt_secret: "test-secret".to_string(),
+                grpc_port: 50051,
+                metrics_port: 9101,
+            }),
+        )
+    }
 
     #[test]
     fn rejects_invalid_accent_color() {
@@ -99,5 +129,47 @@ mod tests {
     #[test]
     fn accepts_supported_default_view() {
         assert_eq!(validate_default_view("calendar").unwrap(), "calendar");
+    }
+
+    #[test]
+    fn normalizes_supported_theme_values() {
+        assert_eq!(validate_theme(" Dark ").unwrap(), "dark");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn get_creates_default_settings_when_missing(pool: PgPool) {
+        let user_id = Uuid::new_v4();
+        insert_user(&pool, user_id).await;
+        let state = state(pool.clone());
+
+        let settings = get(&state, user_id).await.unwrap();
+
+        assert_eq!(settings.theme, "system");
+        assert_eq!(settings.default_view, "dashboard");
+        assert_eq!(settings.accent_color, "#b6532f");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn update_preserves_unspecified_fields(pool: PgPool) {
+        let user_id = Uuid::new_v4();
+        insert_user(&pool, user_id).await;
+        let state = state(pool.clone());
+        repository::ensure_default(&pool, user_id).await.unwrap();
+
+        let settings = update(
+            &state,
+            user_id,
+            UpdateSettingsRequest {
+                theme: Some("light".to_string()),
+                accent_color: None,
+                default_view: Some("reports".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(settings.theme, "light");
+        assert_eq!(settings.default_view, "reports");
+        assert_eq!(settings.accent_color, "#b6532f");
     }
 }

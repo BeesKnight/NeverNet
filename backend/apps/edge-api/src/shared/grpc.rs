@@ -31,3 +31,27 @@ pub async fn connect_channel(endpoint: &str, service_name: &str) -> Result<Chann
         .await
         .map_err(|error| AppError::Internal(format!("{service_name} is unavailable: {error}")))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn interceptor_keeps_request_without_request_id() {
+        let mut interceptor = RequestIdInterceptor;
+        let request = interceptor
+            .call(tonic::Request::new(()))
+            .expect("request should pass through");
+
+        assert!(request.metadata().get("x-request-id").is_none());
+    }
+
+    #[tokio::test]
+    async fn connect_channel_rejects_invalid_endpoints() {
+        let error = connect_channel("http://127.0.0.1:1", "identity")
+            .await
+            .expect_err("unreachable endpoint should fail");
+
+        assert!(error.to_string().contains("identity is unavailable"));
+    }
+}

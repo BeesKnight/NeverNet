@@ -56,3 +56,52 @@ pub async fn upsert(
     .fetch_one(pool)
     .await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn insert_user(pool: &PgPool, user_id: Uuid) {
+        sqlx::query(
+            r#"
+            INSERT INTO users (id, email, password_hash, full_name)
+            VALUES ($1, 'settings@eventdesign.local', 'hash', 'Settings User')
+            "#,
+        )
+        .bind(user_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn ensure_default_creates_or_reuses_settings(pool: PgPool) {
+        let user_id = Uuid::new_v4();
+        insert_user(&pool, user_id).await;
+
+        let first = ensure_default(&pool, user_id).await.unwrap();
+        let second = ensure_default(&pool, user_id).await.unwrap();
+
+        assert_eq!(first.theme, "system");
+        assert_eq!(first.accent_color, "#b6532f");
+        assert_eq!(first.default_view, "dashboard");
+        assert_eq!(second.user_id, user_id);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn upsert_updates_existing_settings(pool: PgPool) {
+        let user_id = Uuid::new_v4();
+        insert_user(&pool, user_id).await;
+        ensure_default(&pool, user_id).await.unwrap();
+
+        let updated = upsert(&pool, user_id, "dark", "#112233", "calendar")
+            .await
+            .unwrap();
+        let loaded = get(&pool, user_id).await.unwrap().unwrap();
+
+        assert_eq!(updated.theme, "dark");
+        assert_eq!(updated.accent_color, "#112233");
+        assert_eq!(updated.default_view, "calendar");
+        assert_eq!(loaded.theme, "dark");
+    }
+}

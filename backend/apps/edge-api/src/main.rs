@@ -51,8 +51,29 @@ async fn main() -> Result<(), AppError> {
     observability::spawn_metrics_server("edge-api", config.metrics_port);
 
     let state = AppState::new(redis, config.clone());
+    let app = build_app(state)?;
 
-    let origins = config
+    let address = SocketAddr::from(([0, 0, 0, 0], config.port));
+    let listener = TcpListener::bind(address).await?;
+
+    tracing::info!("edge-api listening on http://{}", address);
+
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
+
+    Ok(())
+}
+
+async fn health_check() -> axum::Json<ApiResponse<&'static str>> {
+    axum::Json(ApiResponse::new("ok"))
+}
+
+fn build_app(state: AppState) -> Result<Router, AppError> {
+    let origins = state
+        .config
         .frontend_origins
         .iter()
         .map(|origin| {
@@ -102,7 +123,7 @@ async fn main() -> Result<(), AppError> {
         .on_response(DefaultOnResponse::new().level(Level::INFO))
         .on_failure(DefaultOnFailure::new().level(Level::ERROR));
 
-    let app = Router::new()
+    Ok(Router::new()
         .route("/healthz", get(health_check))
         .route("/health", get(health_check))
         .nest("/api/auth", auth::router())
@@ -129,22 +150,98 @@ async fn main() -> Result<(), AppError> {
         ))
         .layer(cors)
         .layer(trace)
-        .with_state(state);
-
-    let address = SocketAddr::from(([0, 0, 0, 0], config.port));
-    let listener = TcpListener::bind(address).await?;
-
-    tracing::info!("edge-api listening on http://{}", address);
-
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .await?;
-
-    Ok(())
+        .with_state(state))
 }
 
-async fn health_check() -> axum::Json<ApiResponse<&'static str>> {
-    axum::Json(ApiResponse::new("ok"))
+#[cfg(test)]
+mod tests {
+    use axum::{
+        body::{Body, to_bytes},
+        http::{Request, StatusCode},
+    };
+    use tower::util::ServiceExt;
+
+    use super::*;
+
+    fn state(frontend_origins: Vec<String>) -> AppState {
+        AppState::new(
+            redis::Client::open("redis://127.0.0.1:6379").expect("redis url should be valid"),
+            Arc::new(Config {
+                redis_url: "redis://127.0.0.1:6379".to_string(),
+                port: 8080,
+                metrics_port: 9100,
+                identity_service_url: "http://127.0.0.1:50051".to_string(),
+                event_command_service_url: "http://127.0.0.1:50052".to_string(),
+                event_query_service_url: "http://127.0.0.1:50053".to_string(),
+                report_service_url: "http://127.0.0.1:50054".to_string(),
+                frontend_origins,
+                auth_cookie_secure: false,
+                rate_limit_window_seconds: 60,
+                rate_limit_requests_per_window: 300,
+                auth_rate_limit_requests_per_window: 20,
+            }),
+        )
+    }
+
+    #[tokio::test]
+    async fn health_check_returns_ok_payload() {
+        let response = health_check().await;
+
+        assert_eq!(response.0.data, "ok");
+    }
+
+    #[tokio::test]
+    async fn build_app_serves_health_and_known_routes() {
+        let app = build_app(state(vec!["http://localhost:3000".to_string()]))
+            .expect("router should build");
+
+        let health_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/healthz")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let csrf_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/auth/csrf")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let categories_response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/categories")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let health_body = to_bytes(health_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let health_body = String::from_utf8(health_body.to_vec()).unwrap();
+
+        assert!(health_body.contains("\"ok\""));
+        assert_eq!(csrf_response.status(), StatusCode::OK);
+        assert_eq!(categories_response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn build_app_rejects_invalid_frontend_header_values() {
+        let error = build_app(state(vec![
+            "http://localhost:3000\r\nx-test: 1".to_string(),
+        ]))
+        .expect_err("invalid header value should fail");
+
+        assert!(error.to_string().contains("Invalid frontend origin"));
+    }
 }

@@ -38,3 +38,56 @@ impl Config {
 fn required(key: &str) -> Result<String, AppError> {
     env::var(key).map_err(|_| AppError::Config(format!("{key} is required")))
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Mutex, OnceLock};
+
+    use super::*;
+
+    static ENV_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
+
+    #[test]
+    fn reads_default_ports_and_redis_url() {
+        with_env(
+            &[
+                ("REDIS_URL", None),
+                ("GRPC_PORT", None),
+                ("METRICS_PORT", None),
+            ],
+            || {
+                let config = Config::from_env().expect("config should be valid");
+                assert_eq!(config.redis_url, "redis://127.0.0.1:6379");
+                assert_eq!(config.grpc_port, 50053);
+                assert_eq!(config.metrics_port, 9103);
+            },
+        );
+    }
+
+    fn with_env(vars: &[(&str, Option<&str>)], test: impl FnOnce()) {
+        let _guard = ENV_MUTEX
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("env mutex poisoned");
+        let saved: Vec<(&str, Option<String>)> = vars
+            .iter()
+            .map(|(key, _)| (*key, env::var(key).ok()))
+            .collect();
+
+        for (key, value) in vars {
+            match value {
+                Some(value) => unsafe { env::set_var(key, value) },
+                None => unsafe { env::remove_var(key) },
+            }
+        }
+
+        test();
+
+        for (key, value) in saved {
+            match value {
+                Some(value) => unsafe { env::set_var(key, value) },
+                None => unsafe { env::remove_var(key) },
+            }
+        }
+    }
+}

@@ -247,3 +247,92 @@ fn map_status(status: tonic::Status) -> AppError {
         _ => AppError::Internal(format!("Event service error: {}", status.message())),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use chrono::TimeZone;
+
+    use super::*;
+
+    fn sample_query_event() -> contracts::event_query::EventItem {
+        contracts::event_query::EventItem {
+            id: Uuid::new_v4().to_string(),
+            user_id: Uuid::new_v4().to_string(),
+            category_id: Uuid::new_v4().to_string(),
+            category_name: "Conference".to_string(),
+            category_color: "#0f766e".to_string(),
+            title: "Defense rehearsal".to_string(),
+            description: "Dry run".to_string(),
+            location: "Room 301".to_string(),
+            starts_at: Utc
+                .with_ymd_and_hms(2026, 3, 15, 10, 0, 0)
+                .unwrap()
+                .to_rfc3339(),
+            ends_at: Utc
+                .with_ymd_and_hms(2026, 3, 15, 12, 0, 0)
+                .unwrap()
+                .to_rfc3339(),
+            budget: 850.0,
+            status: "planned".to_string(),
+            created_at: Utc
+                .with_ymd_and_hms(2026, 3, 13, 10, 0, 0)
+                .unwrap()
+                .to_rfc3339(),
+            updated_at: Utc
+                .with_ymd_and_hms(2026, 3, 13, 10, 5, 0)
+                .unwrap()
+                .to_rfc3339(),
+        }
+    }
+
+    #[test]
+    fn maps_events_from_query_and_command_services() {
+        let query_event = map_query_event(sample_query_event()).expect("query event");
+        let command_event = map_command_event(contracts::event_command::EventRecord {
+            id: query_event.id.to_string(),
+            user_id: query_event.user_id.to_string(),
+            category_id: query_event.category_id.to_string(),
+            title: query_event.title.clone(),
+            description: query_event.description.clone(),
+            location: query_event.location.clone(),
+            starts_at: query_event.starts_at.to_rfc3339(),
+            ends_at: query_event.ends_at.to_rfc3339(),
+            budget: query_event.budget,
+            status: query_event.status.clone(),
+            created_at: query_event.created_at.to_rfc3339(),
+            updated_at: query_event.updated_at.to_rfc3339(),
+        })
+        .expect("command event");
+
+        assert_eq!(query_event.title, "Defense rehearsal");
+        assert_eq!(command_event.location, "Room 301");
+    }
+
+    #[test]
+    fn rejects_invalid_event_identifiers() {
+        let mut event = sample_query_event();
+        event.category_id = "invalid".to_string();
+
+        assert!(map_query_event(event).is_err());
+    }
+
+    #[test]
+    fn maps_event_status_codes() {
+        assert!(matches!(
+            map_status(tonic::Status::invalid_argument("bad")),
+            AppError::BadRequest(_)
+        ));
+        assert!(matches!(
+            map_status(tonic::Status::not_found("missing")),
+            AppError::NotFound(_)
+        ));
+        assert!(matches!(
+            map_status(tonic::Status::already_exists("exists")),
+            AppError::Conflict(_)
+        ));
+        assert!(matches!(
+            map_status(tonic::Status::internal("oops")),
+            AppError::Internal(_)
+        ));
+    }
+}

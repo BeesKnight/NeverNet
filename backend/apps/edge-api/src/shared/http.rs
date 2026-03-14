@@ -146,3 +146,173 @@ fn unix_time_bucket(window_seconds: u64) -> u64 {
 fn _status_text(status: StatusCode) -> &'static str {
     status.canonical_reason().unwrap_or("unknown")
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use axum::{
+        Router,
+        body::{Body, to_bytes},
+        http::Request,
+        middleware,
+        routing::{get, post},
+    };
+    use tower::util::ServiceExt;
+
+    use super::*;
+    use crate::{
+        config::Config,
+        shared::auth::{CSRF_COOKIE_NAME, CSRF_HEADER_NAME},
+    };
+
+    fn state() -> AppState {
+        AppState::new(
+            redis::Client::open("redis://127.0.0.1:6379").expect("redis url should be valid"),
+            Arc::new(Config {
+                redis_url: "redis://127.0.0.1:6379".to_string(),
+                port: 8080,
+                metrics_port: 9100,
+                identity_service_url: "http://127.0.0.1:50051".to_string(),
+                event_command_service_url: "http://127.0.0.1:50052".to_string(),
+                event_query_service_url: "http://127.0.0.1:50053".to_string(),
+                report_service_url: "http://127.0.0.1:50054".to_string(),
+                frontend_origins: vec!["http://localhost:3000".to_string()],
+                auth_cookie_secure: false,
+                rate_limit_window_seconds: 60,
+                rate_limit_requests_per_window: 300,
+                auth_rate_limit_requests_per_window: 20,
+            }),
+        )
+    }
+
+    #[test]
+    fn safe_methods_are_detected() {
+        assert!(is_safe_method(&Method::GET));
+        assert!(is_safe_method(&Method::OPTIONS));
+        assert!(!is_safe_method(&Method::POST));
+    }
+
+    #[test]
+    fn client_identifier_prefers_forwarded_header() {
+        let request = Request::builder()
+            .uri("/")
+            .header("x-forwarded-for", "203.0.113.9, 10.0.0.1")
+            .body(Body::empty())
+            .unwrap();
+
+        assert_eq!(client_identifier(&request).as_deref(), Some("203.0.113.9"));
+    }
+
+    #[test]
+    fn client_identifier_falls_back_to_connect_info() {
+        let mut request = Request::builder().uri("/").body(Body::empty()).unwrap();
+        request
+            .extensions_mut()
+            .insert(ConnectInfo("127.0.0.1:8080".parse::<SocketAddr>().unwrap()));
+
+        assert_eq!(client_identifier(&request).as_deref(), Some("127.0.0.1"));
+    }
+
+    #[test]
+    fn unix_time_bucket_handles_zero_window() {
+        assert_eq!(unix_time_bucket(0), 0);
+    }
+
+    #[test]
+    fn status_text_returns_reason_phrase() {
+        assert_eq!(_status_text(StatusCode::BAD_REQUEST), "Bad Request");
+    }
+
+    #[tokio::test]
+    async fn metrics_middleware_preserves_response() {
+        let app = Router::new()
+            .route("/", get(|| async { StatusCode::NO_CONTENT }))
+            .layer(middleware::from_fn(metrics_middleware));
+
+        let response = app
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn csrf_middleware_allows_safe_methods() {
+        let app = Router::new()
+            .route("/", get(|| async { "ok" }))
+            .layer(middleware::from_fn(csrf_middleware));
+
+        let response = app
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn csrf_middleware_rejects_missing_tokens() {
+        let app = Router::new()
+            .route("/", post(|| async { "ok" }))
+            .layer(middleware::from_fn(csrf_middleware));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert!(body.contains("CSRF token is missing or invalid"));
+    }
+
+    #[tokio::test]
+    async fn csrf_middleware_accepts_matching_cookie_and_header() {
+        let app = Router::new()
+            .route("/", post(|| async { "ok" }))
+            .layer(middleware::from_fn(csrf_middleware));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/")
+                    .header("cookie", format!("{CSRF_COOKIE_NAME}=csrf-token"))
+                    .header(CSRF_HEADER_NAME, "csrf-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn rate_limit_middleware_allows_requests_without_client_identity() {
+        let app = Router::new()
+            .route("/", get(|| async { "ok" }))
+            .route_layer(middleware::from_fn_with_state(
+                state(),
+                rate_limit_middleware,
+            ))
+            .with_state(state());
+
+        let response = app
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+}

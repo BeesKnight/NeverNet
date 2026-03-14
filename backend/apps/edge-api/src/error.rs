@@ -93,3 +93,32 @@ fn error_code(error: &AppError) -> &'static str {
         AppError::Internal(_) | AppError::Io(_) => "internal_error",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use axum::body::to_bytes;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn converts_errors_into_response_envelopes() {
+        let response = AppError::Conflict("already exists".to_string()).into_response();
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body should be readable");
+        let body = String::from_utf8(body.to_vec()).expect("body should be utf8");
+
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert!(body.contains("\"code\":\"conflict\""));
+        assert!(body.contains("already exists"));
+    }
+
+    #[test]
+    fn maps_http_errors_to_internal_app_error() {
+        let invalid_uri = "[".parse::<axum::http::Uri>().expect_err("uri should fail");
+        let error = AppError::from(axum::http::Error::from(invalid_uri));
+
+        assert!(matches!(error, AppError::Internal(_)));
+    }
+}

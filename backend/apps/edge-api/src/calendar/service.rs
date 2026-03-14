@@ -65,3 +65,24 @@ fn map_status(status: tonic::Status) -> AppError {
         _ => AppError::Internal(format!("Calendar service error: {}", status.message())),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maps_calendar_status_codes() {
+        assert!(matches!(
+            map_status(tonic::Status::invalid_argument("bad")),
+            AppError::BadRequest(_)
+        ));
+        assert!(matches!(
+            map_status(tonic::Status::not_found("missing")),
+            AppError::NotFound(_)
+        ));
+        assert!(matches!(
+            map_status(tonic::Status::internal("oops")),
+            AppError::Internal(_)
+        ));
+    }
+}

@@ -311,9 +311,276 @@ fn end_of_day_exclusive(value: NaiveDate) -> chrono::DateTime<Utc> {
 
 #[cfg(test)]
 mod tests {
+    use chrono::{Duration, Utc};
     use sqlx::PgPool;
 
     use super::*;
+
+    async fn insert_user(pool: &PgPool, user_id: Uuid, email: &str) {
+        sqlx::query(
+            r#"
+            INSERT INTO users (id, email, password_hash, full_name)
+            VALUES ($1, $2, 'hash', 'Projection User')
+            "#,
+        )
+        .bind(user_id)
+        .bind(email)
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO ui_settings (user_id, theme)
+            VALUES ($1, 'system')
+            "#,
+        )
+        .bind(user_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn seed_projection_rows(
+        pool: &PgPool,
+        user_id: Uuid,
+        other_user_id: Uuid,
+    ) -> (Uuid, Uuid) {
+        let category_id = Uuid::new_v4();
+        let other_category_id = Uuid::new_v4();
+        let first_event_id = Uuid::new_v4();
+        let second_event_id = Uuid::new_v4();
+        let other_event_id = Uuid::new_v4();
+        let now = Utc::now();
+
+        sqlx::query(
+            r#"
+            INSERT INTO categories (id, user_id, name, color)
+            VALUES
+                ($1, $3, 'Conference', '#0f766e'),
+                ($2, $4, 'Private', '#be123c')
+            "#,
+        )
+        .bind(category_id)
+        .bind(other_category_id)
+        .bind(user_id)
+        .bind(other_user_id)
+        .execute(pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            r#"
+            INSERT INTO event_list_projection (
+                event_id,
+                user_id,
+                category_id,
+                category_name,
+                category_color,
+                title,
+                description,
+                location,
+                starts_at,
+                ends_at,
+                budget,
+                status,
+                created_at,
+                updated_at
+            )
+            VALUES
+                ($1, $4, $6, 'Conference', '#0f766e', 'Alpha Summit', 'Main keynote', 'Hall A', $7, $8, 500.0, 'planned', NOW(), NOW()),
+                ($2, $4, $6, 'Conference', '#0f766e', 'Bravo Workshop', 'Hands-on lab', 'Room B', $9, $10, 250.0, 'cancelled', NOW(), NOW()),
+                ($3, $5, $11, 'Private', '#be123c', 'Hidden Event', 'Other tenant', 'Secret', $7, $8, 900.0, 'planned', NOW(), NOW())
+            "#,
+        )
+        .bind(first_event_id)
+        .bind(second_event_id)
+        .bind(other_event_id)
+        .bind(user_id)
+        .bind(other_user_id)
+        .bind(category_id)
+        .bind(now + Duration::days(3))
+        .bind(now + Duration::days(3) + Duration::hours(2))
+        .bind(now - Duration::days(2))
+        .bind(now - Duration::days(2) + Duration::hours(1))
+        .bind(other_category_id)
+        .execute(pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            r#"
+            INSERT INTO calendar_projection (
+                event_id,
+                user_id,
+                date_bucket,
+                title,
+                starts_at,
+                ends_at,
+                status,
+                category_color,
+                updated_at
+            )
+            VALUES
+                ($1, $2, $3, 'Alpha Summit', $4, $5, 'planned', '#0f766e', NOW()),
+                ($6, $7, $8, 'Hidden Event', $9, $10, 'planned', '#be123c', NOW())
+            "#,
+        )
+        .bind(first_event_id)
+        .bind(user_id)
+        .bind((now + Duration::days(3)).date_naive())
+        .bind(now + Duration::days(3))
+        .bind(now + Duration::days(3) + Duration::hours(2))
+        .bind(other_event_id)
+        .bind(other_user_id)
+        .bind((now + Duration::days(3)).date_naive())
+        .bind(now + Duration::days(3))
+        .bind(now + Duration::days(3) + Duration::hours(2))
+        .execute(pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            r#"
+            INSERT INTO dashboard_projection (
+                user_id,
+                total_events,
+                upcoming_events,
+                completed_events,
+                cancelled_events,
+                total_budget,
+                updated_at
+            )
+            VALUES
+                ($1, 2, 1, 0, 1, 750.0, NOW()),
+                ($2, 1, 1, 0, 0, 900.0, NOW())
+            "#,
+        )
+        .bind(user_id)
+        .bind(other_user_id)
+        .execute(pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            r#"
+            INSERT INTO recent_activity_projection (
+                source_message_id,
+                user_id,
+                entity_type,
+                entity_id,
+                action,
+                title,
+                occurred_at
+            )
+            VALUES
+                ($1, $3, 'event', $5, 'updated', 'Alpha Summit', $6),
+                ($2, $3, 'event', $4, 'cancelled', 'Bravo Workshop', $7)
+            "#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(Uuid::new_v4())
+        .bind(user_id)
+        .bind(second_event_id)
+        .bind(first_event_id)
+        .bind(now)
+        .bind(now - Duration::hours(1))
+        .execute(pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            r#"
+            INSERT INTO report_projection (
+                event_id,
+                user_id,
+                category_id,
+                category_name,
+                category_color,
+                title,
+                description,
+                location,
+                starts_at,
+                ends_at,
+                budget,
+                status,
+                created_at,
+                updated_at
+            )
+            VALUES
+                ($1, $2, $3, 'Conference', '#0f766e', 'Alpha Summit', 'Main keynote', 'Hall A', $4, $5, 500.0, 'planned', NOW(), NOW()),
+                ($6, $2, $3, 'Conference', '#0f766e', 'Bravo Workshop', 'Hands-on lab', 'Room B', $7, $8, 250.0, 'cancelled', NOW(), NOW())
+            "#,
+        )
+        .bind(first_event_id)
+        .bind(user_id)
+        .bind(category_id)
+        .bind(now + Duration::days(3))
+        .bind(now + Duration::days(3) + Duration::hours(2))
+        .bind(second_event_id)
+        .bind(now - Duration::days(2))
+        .bind(now - Duration::days(2) + Duration::hours(1))
+        .execute(pool)
+        .await
+        .unwrap();
+
+        (category_id, first_event_id)
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn projection_queries_return_only_owner_rows(pool: PgPool) {
+        let user_id = Uuid::new_v4();
+        let other_user_id = Uuid::new_v4();
+        insert_user(&pool, user_id, "owner@eventdesign.local").await;
+        insert_user(&pool, other_user_id, "other@eventdesign.local").await;
+        let (category_id, event_id) = seed_projection_rows(&pool, user_id, other_user_id).await;
+
+        let categories = list_categories(&pool, user_id).await.unwrap();
+        let event = get_event(&pool, user_id, event_id).await.unwrap();
+        let foreign_event = get_event(&pool, other_user_id, event_id).await.unwrap();
+        let dashboard = get_dashboard_projection(&pool, user_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let upcoming = list_upcoming_events(&pool, user_id, 10).await.unwrap();
+        let activity = list_recent_activity(&pool, user_id, 10).await.unwrap();
+        let calendar = get_calendar(
+            &pool,
+            user_id,
+            (Utc::now() + Duration::days(2)).date_naive(),
+            (Utc::now() + Duration::days(4)).date_naive(),
+        )
+        .await
+        .unwrap();
+        let rows = list_events(
+            &pool,
+            user_id,
+            &EventFilters {
+                search: Some(" summit ".to_string()),
+                status: Some("planned".to_string()),
+                category_id: Some(category_id),
+                start_date: Some((Utc::now() + Duration::days(2)).date_naive()),
+                end_date: Some((Utc::now() + Duration::days(4)).date_naive()),
+                sort_by: Some("budget".to_string()),
+                sort_dir: Some("desc".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(categories.len(), 1);
+        assert_eq!(categories[0].name, "Conference");
+        assert_eq!(event.unwrap().title, "Alpha Summit");
+        assert!(foreign_event.is_none());
+        assert_eq!(dashboard.total_events, 2);
+        assert_eq!(upcoming.len(), 1);
+        assert_eq!(upcoming[0].title, "Alpha Summit");
+        assert_eq!(activity.len(), 2);
+        assert!(activity[0].occurred_at >= activity[1].occurred_at);
+        assert_eq!(calendar.len(), 1);
+        assert_eq!(calendar[0].title, "Alpha Summit");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].title, "Alpha Summit");
+    }
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn report_rows_apply_filters_and_sorting(pool: PgPool) {
@@ -392,5 +659,14 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].title, "Omega");
         assert!(rows[0].budget > rows[1].budget);
+    }
+
+    #[test]
+    fn projection_filter_helpers_build_expected_ranges() {
+        let start = start_of_day(NaiveDate::from_ymd_opt(2026, 3, 1).unwrap());
+        let end = end_of_day_exclusive(NaiveDate::from_ymd_opt(2026, 3, 31).unwrap());
+
+        assert_eq!(start, Utc.with_ymd_and_hms(2026, 3, 1, 0, 0, 0).unwrap());
+        assert_eq!(end, Utc.with_ymd_and_hms(2026, 4, 1, 0, 0, 0).unwrap());
     }
 }

@@ -10,3 +10,15 @@ impl<T> ApiResponse<T> {
         Self { data }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wraps_payload() {
+        let response = ApiResponse::new("ok");
+
+        assert_eq!(response.data, "ok");
+    }
+}

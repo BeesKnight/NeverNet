@@ -238,3 +238,50 @@ where
         .expect("collector registration should succeed exactly once");
     collector
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use tonic::Request;
+
+    use super::*;
+
+    #[test]
+    fn records_metric_observations() {
+        observe_http_request("GET", "/healthz", 200, Duration::from_millis(25));
+        observe_cache_result("dashboard", "hit");
+        increment_security_event("csrf_rejected");
+        observe_export_duration("pdf", "completed", Duration::from_secs(2));
+        set_projection_lag("dashboard", 3.5);
+        set_queue_lag("exports", -5.0);
+
+        let metric_names = REGISTRY
+            .gather()
+            .into_iter()
+            .map(|metric| metric.get_name().to_string())
+            .collect::<Vec<_>>();
+
+        assert!(metric_names.contains(&"eventdesign_http_requests_total".to_string()));
+        assert!(metric_names.contains(&"eventdesign_cache_requests_total".to_string()));
+        assert!(metric_names.contains(&"eventdesign_security_events_total".to_string()));
+        assert!(metric_names.contains(&"eventdesign_export_duration_seconds".to_string()));
+        assert!(metric_names.contains(&"eventdesign_projection_lag_seconds".to_string()));
+        assert!(metric_names.contains(&"eventdesign_worker_queue_lag_seconds".to_string()));
+    }
+
+    #[test]
+    fn creates_grpc_span_with_request_id() {
+        let mut request = Request::new(());
+        request
+            .metadata_mut()
+            .insert("x-request-id", "req-1".parse().expect("valid metadata"));
+
+        let span = grpc_request_span("identity.login", &request);
+
+        assert_eq!(
+            span.metadata().expect("span metadata").name(),
+            "grpc_request"
+        );
+    }
+}

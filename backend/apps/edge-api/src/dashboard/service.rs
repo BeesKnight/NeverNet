@@ -114,3 +114,74 @@ fn map_status(status: tonic::Status) -> AppError {
         _ => AppError::Internal(format!("Dashboard service error: {}", status.message())),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use chrono::TimeZone;
+
+    use super::*;
+
+    #[test]
+    fn maps_dashboard_event_and_activity_rows() {
+        let event = map_event(contracts::event_query::EventItem {
+            id: Uuid::new_v4().to_string(),
+            user_id: Uuid::new_v4().to_string(),
+            category_id: Uuid::new_v4().to_string(),
+            category_name: "Conference".to_string(),
+            category_color: "#0f766e".to_string(),
+            title: "Defense rehearsal".to_string(),
+            description: "Dry run".to_string(),
+            location: "Room 301".to_string(),
+            starts_at: Utc
+                .with_ymd_and_hms(2026, 3, 15, 10, 0, 0)
+                .unwrap()
+                .to_rfc3339(),
+            ends_at: Utc
+                .with_ymd_and_hms(2026, 3, 15, 12, 0, 0)
+                .unwrap()
+                .to_rfc3339(),
+            budget: 850.0,
+            status: "planned".to_string(),
+            created_at: Utc
+                .with_ymd_and_hms(2026, 3, 13, 10, 0, 0)
+                .unwrap()
+                .to_rfc3339(),
+            updated_at: Utc
+                .with_ymd_and_hms(2026, 3, 13, 10, 5, 0)
+                .unwrap()
+                .to_rfc3339(),
+        })
+        .expect("event should map");
+        let activity = map_activity(contracts::event_query::ActivityItem {
+            id: "activity-1".to_string(),
+            entity_type: "event".to_string(),
+            entity_id: "event-1".to_string(),
+            action: "created".to_string(),
+            title: "Defense rehearsal".to_string(),
+            occurred_at: Utc
+                .with_ymd_and_hms(2026, 3, 13, 10, 0, 0)
+                .unwrap()
+                .to_rfc3339(),
+        })
+        .expect("activity should map");
+
+        assert_eq!(event.title, "Defense rehearsal");
+        assert_eq!(activity.entity_type, "event");
+    }
+
+    #[test]
+    fn maps_dashboard_status_codes() {
+        assert!(matches!(
+            map_status(tonic::Status::invalid_argument("bad")),
+            AppError::BadRequest(_)
+        ));
+        assert!(matches!(
+            map_status(tonic::Status::not_found("missing")),
+            AppError::NotFound(_)
+        ));
+        assert!(matches!(
+            map_status(tonic::Status::internal("oops")),
+            AppError::Internal(_)
+        ));
+    }
+}

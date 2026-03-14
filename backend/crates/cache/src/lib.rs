@@ -16,3 +16,24 @@ impl CacheConfig {
 pub fn dashboard_key(user_id: &str) -> String {
     format!("dashboard:{user_id}")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_default_cache_config() {
+        unsafe {
+            std::env::remove_var("REDIS_URL");
+        }
+
+        let config = CacheConfig::from_env();
+
+        assert_eq!(config.redis_url, DEFAULT_REDIS_URL);
+    }
+
+    #[test]
+    fn builds_dashboard_cache_key() {
+        assert_eq!(dashboard_key("user-1"), "dashboard:user-1");
+    }
+}

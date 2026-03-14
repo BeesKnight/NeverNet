@@ -170,3 +170,72 @@ fn map_status(status: tonic::Status) -> AppError {
         _ => AppError::Internal(format!("Category service error: {}", status.message())),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use chrono::TimeZone;
+
+    use super::*;
+
+    fn sample_query_category() -> contracts::event_query::Category {
+        contracts::event_query::Category {
+            id: Uuid::new_v4().to_string(),
+            user_id: Uuid::new_v4().to_string(),
+            name: "Conference".to_string(),
+            color: "#0f766e".to_string(),
+            created_at: Utc
+                .with_ymd_and_hms(2026, 3, 13, 10, 0, 0)
+                .unwrap()
+                .to_rfc3339(),
+            updated_at: Utc
+                .with_ymd_and_hms(2026, 3, 13, 10, 5, 0)
+                .unwrap()
+                .to_rfc3339(),
+        }
+    }
+
+    #[test]
+    fn maps_categories_from_query_and_command_services() {
+        let query_category = map_query_category(sample_query_category()).expect("query category");
+        let command_category = map_command_category(contracts::event_command::Category {
+            id: query_category.id.to_string(),
+            user_id: query_category.user_id.to_string(),
+            name: query_category.name.clone(),
+            color: query_category.color.clone(),
+            created_at: query_category.created_at.to_rfc3339(),
+            updated_at: query_category.updated_at.to_rfc3339(),
+        })
+        .expect("command category");
+
+        assert_eq!(query_category.name, "Conference");
+        assert_eq!(command_category.color, "#0f766e");
+    }
+
+    #[test]
+    fn rejects_invalid_category_identifiers() {
+        let mut category = sample_query_category();
+        category.id = "invalid".to_string();
+
+        assert!(map_query_category(category).is_err());
+    }
+
+    #[test]
+    fn maps_category_status_codes() {
+        assert!(matches!(
+            map_status(tonic::Status::invalid_argument("bad")),
+            AppError::BadRequest(_)
+        ));
+        assert!(matches!(
+            map_status(tonic::Status::not_found("missing")),
+            AppError::NotFound(_)
+        ));
+        assert!(matches!(
+            map_status(tonic::Status::already_exists("exists")),
+            AppError::Conflict(_)
+        ));
+        assert!(matches!(
+            map_status(tonic::Status::internal("oops")),
+            AppError::Internal(_)
+        ));
+    }
+}

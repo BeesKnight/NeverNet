@@ -179,3 +179,79 @@ fn map_status(status: tonic::Status) -> AppError {
         _ => AppError::Internal(format!("Report service error: {}", status.message())),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use chrono::{TimeZone, Utc};
+
+    use super::*;
+
+    fn sample_export_job() -> contracts::reporting::ExportJob {
+        contracts::reporting::ExportJob {
+            id: Uuid::new_v4().to_string(),
+            user_id: Uuid::new_v4().to_string(),
+            report_type: "summary".to_string(),
+            format: "pdf".to_string(),
+            status: "completed".to_string(),
+            filters_json: r#"{"status":"planned"}"#.to_string(),
+            object_key: "exports/report.pdf".to_string(),
+            content_type: "application/pdf".to_string(),
+            error_message: String::new(),
+            created_at: Utc
+                .with_ymd_and_hms(2026, 3, 13, 10, 0, 0)
+                .unwrap()
+                .to_rfc3339(),
+            started_at: String::new(),
+            updated_at: Utc
+                .with_ymd_and_hms(2026, 3, 13, 10, 5, 0)
+                .unwrap()
+                .to_rfc3339(),
+            finished_at: Utc
+                .with_ymd_and_hms(2026, 3, 13, 10, 6, 0)
+                .unwrap()
+                .to_rfc3339(),
+        }
+    }
+
+    #[test]
+    fn maps_export_jobs_and_optional_values() {
+        let job = map_export_job(sample_export_job()).expect("export job should map");
+
+        assert_eq!(job.report_type, "summary");
+        assert_eq!(job.content_type.as_deref(), Some("application/pdf"));
+        assert_eq!(optional_string(String::new()), None);
+        assert!(
+            optional_timestamp("", "started_at")
+                .expect("empty timestamp")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_export_payload() {
+        let mut job = sample_export_job();
+        job.filters_json = "{".to_string();
+
+        assert!(map_export_job(job).is_err());
+    }
+
+    #[test]
+    fn maps_export_status_codes() {
+        assert!(matches!(
+            map_status(tonic::Status::invalid_argument("bad")),
+            AppError::BadRequest(_)
+        ));
+        assert!(matches!(
+            map_status(tonic::Status::not_found("missing")),
+            AppError::NotFound(_)
+        ));
+        assert!(matches!(
+            map_status(tonic::Status::failed_precondition("not-ready")),
+            AppError::BadRequest(_)
+        ));
+        assert!(matches!(
+            map_status(tonic::Status::internal("oops")),
+            AppError::Internal(_)
+        ));
+    }
+}

@@ -762,3 +762,217 @@ fn month_bounds(value: DateTime<Utc>) -> (NaiveDate, NaiveDate) {
     };
     (start, end)
 }
+
+#[cfg(test)]
+mod tests {
+    use chrono::TimeZone;
+
+    use super::*;
+
+    fn default_config() -> Config {
+        Config {
+            database_url: "postgres://postgres:postgres@localhost:55432/postgres".to_string(),
+            minio_endpoint: "http://127.0.0.1:9000".to_string(),
+            minio_bucket: "eventdesign-exports".to_string(),
+            minio_access_key: "eventdesign".to_string(),
+            minio_secret_key: "eventdesign123".to_string(),
+            minio_region: "us-east-1".to_string(),
+        }
+    }
+
+    fn sample_events() -> Vec<EventSeed> {
+        let categories = build_categories();
+        build_events(&categories)
+    }
+
+    #[test]
+    fn build_categories_returns_expected_seed_catalog() {
+        let categories = build_categories();
+
+        assert_eq!(categories.len(), 5);
+        assert_eq!(categories[0].name, "Conference");
+        assert_eq!(categories[4].name, "Expo");
+        assert!(
+            categories
+                .iter()
+                .all(|category| category.color.starts_with('#'))
+        );
+        assert_eq!(
+            categories
+                .iter()
+                .map(|category| category.id)
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            categories.len()
+        );
+    }
+
+    #[test]
+    fn build_events_creates_balanced_demo_schedule() {
+        let categories = build_categories();
+        let events = build_events(&categories);
+        let category_ids = categories
+            .iter()
+            .map(|category| category.id)
+            .collect::<std::collections::HashSet<_>>();
+
+        assert_eq!(events.len(), 14);
+        assert!(
+            events
+                .iter()
+                .all(|event| category_ids.contains(&event.category_id))
+        );
+        assert!(events.iter().all(|event| event.ends_at > event.starts_at));
+        assert!(
+            events
+                .windows(2)
+                .all(|pair| pair[1].budget > pair[0].budget)
+        );
+        assert!(events.iter().any(|event| event.status == "planned"));
+        assert!(events.iter().any(|event| event.status == "completed"));
+        assert!(events.iter().all(|event| matches!(
+            event.status,
+            "planned" | "in_progress" | "completed" | "cancelled"
+        )));
+    }
+
+    #[test]
+    fn artifact_builders_generate_pdf_and_xlsx_payloads() {
+        let events = sample_events();
+        let pdf = build_pdf(&events).expect("pdf export should be generated");
+        let xlsx = build_xlsx(&events).expect("xlsx export should be generated");
+
+        assert!(pdf.starts_with(b"%PDF"));
+        assert_eq!(&xlsx[..2], b"PK");
+    }
+
+    #[test]
+    fn storage_client_uses_minio_configuration() {
+        let bucket = build_storage_client(&default_config()).expect("storage client should build");
+
+        assert_eq!(bucket.region().endpoint(), "http://127.0.0.1:9000");
+    }
+
+    #[test]
+    fn month_bounds_handles_regular_and_december_months() {
+        let march = Utc.with_ymd_and_hms(2026, 3, 14, 12, 0, 0).unwrap();
+        let december = Utc.with_ymd_and_hms(2026, 12, 20, 12, 0, 0).unwrap();
+
+        assert_eq!(
+            month_bounds(march),
+            (
+                NaiveDate::from_ymd_opt(2026, 3, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 4, 1).unwrap()
+            )
+        );
+        assert_eq!(
+            month_bounds(december),
+            (
+                NaiveDate::from_ymd_opt(2026, 12, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2027, 1, 1).unwrap()
+            )
+        );
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn recreate_demo_user_replaces_previous_seed(pool: PgPool) {
+        let first_user_id = recreate_demo_user(&pool)
+            .await
+            .expect("first demo user should be created");
+        let second_user_id = recreate_demo_user(&pool)
+            .await
+            .expect("second demo user should replace previous one");
+
+        let user_count =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE email = $1")
+                .bind(DEMO_EMAIL)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let settings_count =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM ui_settings WHERE user_id = $1")
+                .bind(second_user_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+
+        assert_ne!(first_user_id, second_user_id);
+        assert_eq!(user_count, 1);
+        assert_eq!(settings_count, 1);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn category_event_and_projection_seeders_fill_read_models(pool: PgPool) {
+        let user_id = recreate_demo_user(&pool)
+            .await
+            .expect("demo user should be created");
+        let categories = build_categories();
+        let events = build_events(&categories);
+
+        insert_categories(&pool, user_id, &categories)
+            .await
+            .expect("categories should be inserted");
+        insert_events(&pool, user_id, &events)
+            .await
+            .expect("events should be inserted");
+        refresh_projections(&pool, user_id)
+            .await
+            .expect("projections should be refreshed");
+
+        let category_count =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM categories WHERE user_id = $1")
+                .bind(user_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let event_count =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM events WHERE user_id = $1")
+                .bind(user_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let event_projection_count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM event_list_projection WHERE user_id = $1",
+        )
+        .bind(user_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let calendar_projection_count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM calendar_projection WHERE user_id = $1",
+        )
+        .bind(user_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let report_projection_count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM report_projection WHERE user_id = $1",
+        )
+        .bind(user_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let activity_count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM recent_activity_projection WHERE user_id = $1",
+        )
+        .bind(user_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let total_events = sqlx::query_scalar::<_, i64>(
+            "SELECT total_events FROM dashboard_projection WHERE user_id = $1",
+        )
+        .bind(user_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(category_count, categories.len() as i64);
+        assert_eq!(event_count, events.len() as i64);
+        assert_eq!(event_projection_count, events.len() as i64);
+        assert_eq!(calendar_projection_count, events.len() as i64);
+        assert_eq!(report_projection_count, events.len() as i64);
+        assert!(activity_count > 0);
+        assert_eq!(total_events, events.len() as i64);
+    }
+}

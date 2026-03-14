@@ -112,4 +112,32 @@ mod tests {
         assert_eq!(cookie.path(), Some("/"));
         assert_eq!(cookie.max_age(), Some(Duration::seconds(0)));
     }
+
+    #[test]
+    fn removal_cookie_clears_session() {
+        let cookie = build_removal_cookie(true);
+
+        assert_eq!(cookie.value(), "");
+        assert_eq!(cookie.http_only(), Some(true));
+        assert_eq!(cookie.secure(), Some(true));
+        assert_eq!(cookie.max_age(), Some(Duration::seconds(0)));
+    }
+
+    #[test]
+    fn csrf_cookie_is_not_http_only_and_uses_lax_policy() {
+        let cookie = build_csrf_cookie("csrf-token".to_string(), true);
+
+        assert_eq!(cookie.value(), "csrf-token");
+        assert_eq!(cookie.http_only(), None);
+        assert_eq!(cookie.same_site(), Some(SameSite::Lax));
+        assert_eq!(cookie.secure(), Some(true));
+    }
+
+    #[test]
+    fn generated_csrf_tokens_are_uuid_without_dashes() {
+        let token = generate_csrf_token();
+
+        assert_eq!(token.len(), 32);
+        assert!(token.chars().all(|character| character.is_ascii_hexdigit()));
+    }
 }

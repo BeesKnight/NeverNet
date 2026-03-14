@@ -196,3 +196,52 @@ fn status_from_error(error: AppError) -> Status {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use chrono::{TimeZone, Utc};
+
+    use super::*;
+
+    #[test]
+    fn maps_user_and_settings_to_grpc_models() {
+        let user_id = uuid::Uuid::new_v4();
+        let created_at = Utc.with_ymd_and_hms(2026, 3, 13, 10, 0, 0).unwrap();
+        let user = map_user(UserProfile {
+            id: user_id,
+            email: "demo@eventdesign.local".to_string(),
+            full_name: "Demo User".to_string(),
+            created_at,
+        });
+        let settings = map_settings(UiSettings {
+            user_id,
+            theme: "system".to_string(),
+            accent_color: "#b6532f".to_string(),
+            default_view: "dashboard".to_string(),
+            created_at,
+            updated_at: created_at,
+        });
+
+        assert_eq!(user.id, user_id.to_string());
+        assert_eq!(user.email, "demo@eventdesign.local");
+        assert_eq!(settings.user_id, user_id.to_string());
+        assert_eq!(settings.theme, "system");
+    }
+
+    #[test]
+    fn parses_uuid_and_maps_domain_errors() {
+        assert!(parse_uuid("not-a-uuid", "user_id").is_err());
+        assert_eq!(
+            status_from_error(AppError::BadRequest("bad".to_string())).code(),
+            tonic::Code::InvalidArgument
+        );
+        assert_eq!(
+            status_from_error(AppError::Unauthorized("denied".to_string())).code(),
+            tonic::Code::Unauthenticated
+        );
+        assert_eq!(
+            status_from_error(AppError::Conflict("exists".to_string())).code(),
+            tonic::Code::AlreadyExists
+        );
+    }
+}

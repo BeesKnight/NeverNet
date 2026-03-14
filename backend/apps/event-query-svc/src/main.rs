@@ -429,3 +429,152 @@ fn status_from_error(error: AppError) -> Status {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use chrono::TimeZone;
+
+    use super::*;
+
+    #[test]
+    fn parses_event_and_report_filters() {
+        let category_id = Uuid::new_v4();
+        let event_filters = parse_event_filters(&ListEventsRequest {
+            user_id: String::new(),
+            search: "  conference  ".to_string(),
+            status: "planned".to_string(),
+            category_id: category_id.to_string(),
+            start_date: "2026-03-01".to_string(),
+            end_date: "2026-03-31".to_string(),
+            sort_by: "starts_at".to_string(),
+            sort_dir: "desc".to_string(),
+        })
+        .expect("event filters should parse");
+        let report_filters = parse_report_filters(&GetReportSummaryRequest {
+            user_id: String::new(),
+            category_id: category_id.to_string(),
+            status: "completed".to_string(),
+            start_date: "2026-03-01".to_string(),
+            end_date: "2026-03-31".to_string(),
+            sort_by: "budget".to_string(),
+            sort_dir: "asc".to_string(),
+        })
+        .expect("report filters should parse");
+
+        assert_eq!(event_filters.search.as_deref(), Some("conference"));
+        assert_eq!(event_filters.category_id, Some(category_id));
+        assert_eq!(report_filters.status.as_deref(), Some("completed"));
+        assert_eq!(
+            report_filters.start_date,
+            NaiveDate::from_ymd_opt(2026, 3, 1)
+        );
+    }
+
+    #[test]
+    fn normalizes_and_parses_optional_values() {
+        assert_eq!(normalized("  hello  ").as_deref(), Some("hello"));
+        assert_eq!(normalized("   "), None);
+        assert!(parse_uuid("not-a-uuid", "user_id").is_err());
+        assert!(
+            optional_uuid("", "category_id")
+                .expect("empty uuid")
+                .is_none()
+        );
+        assert!(
+            optional_date("", "start_date")
+                .expect("empty date")
+                .is_none()
+        );
+        assert!(parse_date("bad-date", "start_date").is_err());
+    }
+
+    #[test]
+    fn maps_projection_rows_to_grpc_contracts() {
+        let user_id = Uuid::new_v4();
+        let category_id = Uuid::new_v4();
+        let event_id = Uuid::new_v4();
+        let occurred_at = Utc.with_ymd_and_hms(2026, 3, 13, 10, 0, 0).unwrap();
+        let category = map_category(CategoryRow {
+            id: category_id,
+            user_id,
+            name: "Conference".to_string(),
+            color: "#0f766e".to_string(),
+            created_at: occurred_at,
+            updated_at: occurred_at,
+        });
+        let event = map_event(EventItemRow {
+            id: event_id,
+            user_id,
+            category_id,
+            category_name: "Conference".to_string(),
+            category_color: "#0f766e".to_string(),
+            title: "Defense rehearsal".to_string(),
+            description: "Dry run".to_string(),
+            location: "Room 301".to_string(),
+            starts_at: occurred_at,
+            ends_at: occurred_at,
+            budget: 850.0,
+            status: "planned".to_string(),
+            created_at: occurred_at,
+            updated_at: occurred_at,
+        });
+        let calendar = map_calendar_item(CalendarItemRow {
+            event_id,
+            title: "Defense rehearsal".to_string(),
+            date: NaiveDate::from_ymd_opt(2026, 3, 15).expect("valid date"),
+            starts_at: occurred_at,
+            ends_at: occurred_at,
+            status: "planned".to_string(),
+            category_color: "#0f766e".to_string(),
+        });
+        let dashboard = map_dashboard_cards(DashboardProjectionRow {
+            user_id,
+            total_events: 10,
+            upcoming_events: 3,
+            completed_events: 5,
+            cancelled_events: 2,
+            total_budget: 1250.0,
+            updated_at: occurred_at,
+        });
+        let activity = map_activity(ActivityRow {
+            id: Uuid::new_v4(),
+            entity_type: "event".to_string(),
+            entity_id: event_id,
+            action: "created".to_string(),
+            title: "Defense rehearsal".to_string(),
+            occurred_at,
+        });
+        let by_category = map_report_category(LocalReportCategoryRow {
+            category_id,
+            category_name: "Conference".to_string(),
+            category_color: "#0f766e".to_string(),
+            event_count: 2,
+            total_budget: 850.0,
+        });
+        let by_status = map_report_status(LocalReportStatusRow {
+            status: "planned".to_string(),
+            event_count: 2,
+            total_budget: 850.0,
+        });
+
+        assert_eq!(category.name, "Conference");
+        assert_eq!(event.title, "Defense rehearsal");
+        assert_eq!(calendar.event_id, event_id.to_string());
+        assert_eq!(dashboard.total_events, 10);
+        assert_eq!(activity.entity_type, "event");
+        assert_eq!(by_category.event_count, 2);
+        assert_eq!(by_status.status, "planned");
+    }
+
+    #[test]
+    fn maps_app_errors_to_grpc_status() {
+        assert_eq!(
+            status_from_error(AppError::Config("bad config".to_string())).code(),
+            tonic::Code::Internal
+        );
+        assert_eq!(
+            status_from_error(AppError::Database(sqlx::Error::RowNotFound)).code(),
+            tonic::Code::Internal
+        );
+    }
+}

@@ -1857,9 +1857,92 @@ async fn upload_export_artifact(
 
 #[cfg(test)]
 mod tests {
+    use chrono::TimeZone;
     use sqlx::PgPool;
 
     use super::*;
+
+    fn report_event(
+        title: &str,
+        location: &str,
+        status: &str,
+        budget: f64,
+        starts_at: DateTime<Utc>,
+    ) -> ReportEventRow {
+        ReportEventRow {
+            id: Uuid::new_v4(),
+            user_id: Uuid::new_v4(),
+            category_id: Uuid::new_v4(),
+            category_name: "Conference".to_string(),
+            category_color: "#0f766e".to_string(),
+            title: title.to_string(),
+            description: "Report event".to_string(),
+            location: location.to_string(),
+            starts_at,
+            ends_at: starts_at + chrono::Duration::hours(2),
+            budget,
+            status: status.to_string(),
+            created_at: starts_at,
+            updated_at: starts_at,
+        }
+    }
+
+    fn report_summary() -> ReportSummary {
+        ReportSummary {
+            period_start: Some(NaiveDate::from_ymd_opt(2026, 3, 1).unwrap()),
+            period_end: Some(NaiveDate::from_ymd_opt(2026, 3, 31).unwrap()),
+            total_events: 2,
+            total_budget: 1750.0,
+            events: vec![
+                report_event(
+                    "Alpha Summit",
+                    "",
+                    "planned",
+                    1200.0,
+                    Utc.with_ymd_and_hms(2026, 3, 14, 10, 0, 0).unwrap(),
+                ),
+                report_event(
+                    "Bravo Workshop",
+                    "Room B",
+                    "completed",
+                    550.0,
+                    Utc.with_ymd_and_hms(2026, 3, 16, 15, 30, 0).unwrap(),
+                ),
+            ],
+        }
+    }
+
+    fn export_job(format: &str, status: &str, started_at: Option<DateTime<Utc>>) -> ExportJobRow {
+        ExportJobRow {
+            id: Uuid::new_v4(),
+            user_id: Uuid::new_v4(),
+            report_type: "summary".to_string(),
+            format: format.to_string(),
+            status: status.to_string(),
+            filters: serde_json::json!({}),
+            object_key: None,
+            content_type: None,
+            error_message: None,
+            created_at: Utc::now(),
+            started_at,
+            updated_at: Utc::now(),
+            finished_at: None,
+        }
+    }
+
+    fn worker_config() -> Config {
+        Config {
+            database_url: "postgres://postgres:postgres@localhost:55432/postgres".to_string(),
+            cache: CacheConfig::from_env(),
+            messaging: MessagingConfig::from_env(),
+            metrics_port: 9105,
+            minio_endpoint: "http://127.0.0.1:9000".to_string(),
+            minio_bucket: "eventdesign-exports".to_string(),
+            minio_access_key: "eventdesign".to_string(),
+            minio_secret_key: "eventdesign123".to_string(),
+            minio_region: "us-east-1".to_string(),
+        }
+    }
 
     async fn insert_user(pool: &PgPool) -> Uuid {
         let user_id = Uuid::new_v4();
@@ -2193,5 +2276,175 @@ mod tests {
 
         assert!(first);
         assert!(!second);
+    }
+
+    #[test]
+    fn stale_export_job_detects_missing_recent_and_expired_processing() {
+        let missing_started_at = export_job("pdf", "processing", None);
+        let fresh_job = export_job(
+            "pdf",
+            "processing",
+            Some(Utc::now() - chrono::Duration::minutes(2)),
+        );
+        let stale_job = export_job(
+            "pdf",
+            "processing",
+            Some(Utc::now() - chrono::Duration::minutes(30)),
+        );
+
+        assert!(is_stale_export_job(&missing_started_at));
+        assert!(!is_stale_export_job(&fresh_job));
+        assert!(is_stale_export_job(&stale_job));
+    }
+
+    #[test]
+    fn day_boundaries_cover_whole_date() {
+        let date = NaiveDate::from_ymd_opt(2026, 3, 14).unwrap();
+
+        assert_eq!(
+            start_of_day(date),
+            Utc.with_ymd_and_hms(2026, 3, 14, 0, 0, 0).unwrap()
+        );
+        assert_eq!(
+            end_of_day_exclusive(date),
+            Utc.with_ymd_and_hms(2026, 3, 15, 0, 0, 0).unwrap()
+        );
+    }
+
+    #[test]
+    fn export_artifacts_include_summary_content() {
+        let summary = report_summary();
+        let lines = pdf_lines(&summary);
+        let pdf = build_pdf(&summary).expect("pdf should be built");
+        let xlsx = build_xlsx(&summary).expect("xlsx should be built");
+        let pdf_artifact = build_export_artifact(&export_job("pdf", "queued", None), &summary)
+            .expect("pdf artifact should be created");
+        let xlsx_artifact = build_export_artifact(&export_job("xlsx", "queued", None), &summary)
+            .expect("xlsx artifact should be created");
+        let unsupported = build_export_artifact(&export_job("csv", "queued", None), &summary)
+            .expect_err("unsupported format should fail");
+
+        assert!(lines.iter().any(|line| line.contains("Not specified")));
+        assert!(lines.iter().any(|line| line.contains("Alpha Summit")));
+        assert!(pdf.starts_with(b"%PDF"));
+        assert_eq!(&xlsx[..2], b"PK");
+        assert_eq!(pdf_artifact.content_type, "application/pdf");
+        assert!(pdf_artifact.object_key.ends_with(".pdf"));
+        assert_eq!(
+            xlsx_artifact.content_type,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        );
+        assert!(xlsx_artifact.object_key.ends_with(".xlsx"));
+        assert!(
+            unsupported
+                .to_string()
+                .contains("Unsupported export format")
+        );
+    }
+
+    #[test]
+    fn storage_bucket_uses_minio_endpoint() {
+        let bucket = build_storage_bucket(&worker_config()).expect("bucket client should build");
+
+        assert_eq!(bucket.region().endpoint(), "http://127.0.0.1:9000");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn generate_report_summary_applies_status_and_date_filters(pool: PgPool) {
+        let user_id = insert_user(&pool).await;
+        let conference_id = Uuid::new_v4();
+        let workshop_id = Uuid::new_v4();
+
+        sqlx::query(
+            r#"
+            INSERT INTO report_projection (
+                event_id,
+                user_id,
+                category_id,
+                category_name,
+                category_color,
+                title,
+                description,
+                location,
+                starts_at,
+                ends_at,
+                budget,
+                status,
+                created_at,
+                updated_at
+            )
+            VALUES
+                ($1, $3, $4, 'Conference', '#0f766e', 'Alpha Summit', 'a', 'Hall A', '2026-03-10T10:00:00Z', '2026-03-10T12:00:00Z', 900.0, 'planned', NOW(), NOW()),
+                ($2, $3, $5, 'Workshop', '#b45309', 'Bravo Lab', 'b', 'Room B', '2026-04-02T10:00:00Z', '2026-04-02T12:00:00Z', 300.0, 'completed', NOW(), NOW())
+            "#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(Uuid::new_v4())
+        .bind(user_id)
+        .bind(conference_id)
+        .bind(workshop_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let summary = generate_report_summary(
+            &pool,
+            user_id,
+            &ExportFilters {
+                status: Some("planned".to_string()),
+                category_id: Some(conference_id),
+                start_date: Some(NaiveDate::from_ymd_opt(2026, 3, 1).unwrap()),
+                end_date: Some(NaiveDate::from_ymd_opt(2026, 3, 31).unwrap()),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(summary.total_events, 1);
+        assert_eq!(summary.total_budget, 900.0);
+        assert_eq!(summary.events[0].title, "Alpha Summit");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn mark_export_failed_updates_job_and_persists_outbox(pool: PgPool) {
+        let user_id = insert_user(&pool).await;
+        let export_id = Uuid::new_v4();
+        let message_id = Uuid::new_v4();
+
+        sqlx::query(
+            r#"
+            INSERT INTO export_jobs (id, user_id, report_type, format, status, filters)
+            VALUES ($1, $2, 'summary', 'pdf', 'queued', '{}'::jsonb)
+            "#,
+        )
+        .bind(export_id)
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        mark_export_failed(&pool, export_id, "MinIO unavailable", message_id)
+            .await
+            .expect("job should be marked as failed");
+
+        let failed_job = load_export_job(&pool, export_id).await.unwrap().unwrap();
+        let processed = processed_message_exists(&pool, EXPORT_CONSUMER, message_id)
+            .await
+            .unwrap();
+        let failed_events = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM outbox_events WHERE aggregate_id = $1 AND event_type = 'export.failed'",
+        )
+        .bind(export_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(failed_job.status, "failed");
+        assert_eq!(
+            failed_job.error_message.as_deref(),
+            Some("MinIO unavailable")
+        );
+        assert!(processed);
+        assert_eq!(failed_events, 1);
     }
 }
